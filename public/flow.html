@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bros and Subs · Flujo del sistema</title>
+  <script type="module">
+    import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'base',
+      themeVariables: {
+        primaryColor: '#fff7ed',
+        primaryTextColor: '#7c2d12',
+        primaryBorderColor: '#fb923c',
+        lineColor: '#9ca3af',
+        secondaryColor: '#dbeafe',
+        tertiaryColor: '#dcfce7',
+        background: '#ffffff',
+        mainBkg: '#fff7ed',
+        secondBkg: '#dbeafe',
+        tertiaryBkg: '#dcfce7',
+        fontFamily: '"SF Pro Text", system-ui, sans-serif',
+      },
+      flowchart: {
+        curve: 'basis',
+        htmlLabels: true,
+        useMaxWidth: false,
+      },
+    });
+  </script>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --fg: #f1f5f9;
+      --muted: #94a3b8;
+      --card: #1e293b;
+      --border: #334155;
+      --accent: #fb923c;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: "SF Pro Text", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.6;
+      min-height: 100vh;
+    }
+    .container { max-width: 1600px; margin: 0 auto; padding: 32px 24px 80px; }
+    header { border-bottom: 1px solid var(--border); padding-bottom: 24px; margin-bottom: 32px; }
+    h1 { margin: 0 0 8px; font-size: 28px; color: var(--accent); }
+    h2 { margin: 48px 0 16px; font-size: 22px; color: var(--fg); }
+    p.lead { color: var(--muted); margin: 0; font-size: 15px; }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 24px;
+      margin: 16px 0 32px;
+      overflow-x: auto;
+    }
+    .legend {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      margin: 16px 0;
+      font-size: 13px;
+    }
+    .legend-item { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+    .swatch { width: 14px; height: 14px; border-radius: 3px; border: 1px solid var(--border); }
+    pre.mermaid {
+      background: #fff;
+      border-radius: 8px;
+      padding: 24px;
+      margin: 0;
+      text-align: center;
+      overflow-x: auto;
+    }
+    .toc {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px 20px;
+      margin-bottom: 32px;
+      font-size: 14px;
+    }
+    .toc ol { margin: 8px 0 0; padding-left: 20px; }
+    .toc a { color: var(--accent); text-decoration: none; }
+    .toc a:hover { text-decoration: underline; }
+    code {
+      background: #334155;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      font-family: ui-monospace, "SF Mono", monospace;
+    }
+    .note {
+      background: rgba(251, 146, 60, 0.1);
+      border-left: 3px solid var(--accent);
+      padding: 12px 16px;
+      margin: 16px 0;
+      border-radius: 4px;
+      font-size: 14px;
+      color: #fed7aa;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>🥪 Bros and Subs · Flujo del sistema</h1>
+      <p class="lead">Diagramas del bot WhatsApp, flujo de pedido, panel admin y eventos clave.</p>
+    </header>
+
+    <div class="toc">
+      <strong>Contenido</strong>
+      <ol>
+        <li><a href="#overview">Vista general del sistema</a></li>
+        <li><a href="#bot">Bot WhatsApp — state machine</a></li>
+        <li><a href="#operario">Panel admin (operaria) — kanban y bandeja</a></li>
+        <li><a href="#wompi">Pasarela Wompi — checkout y webhook</a></li>
+        <li><a href="#datos">Modelo de datos</a></li>
+      </ol>
+    </div>
+
+    <div class="legend">
+      <span class="legend-item"><span class="swatch" style="background:#fff7ed"></span>Estado / acción del bot</span>
+      <span class="legend-item"><span class="swatch" style="background:#dbeafe"></span>Backend / API</span>
+      <span class="legend-item"><span class="swatch" style="background:#dcfce7"></span>Tabla Supabase / dato</span>
+    </div>
+
+    <!-- ====================================================== -->
+    <h2 id="overview">1. Vista general del sistema</h2>
+    <p>Cómo se mueve un mensaje desde el cliente hasta cocina y de vuelta.</p>
+    <div class="card">
+      <pre class="mermaid">
+flowchart LR
+    Cliente([📱 Cliente<br/>WhatsApp]) --> Kapso[(Kapso<br/>sandbox)]
+    Kapso -->|webhook<br/>POST| Backend[Backend Next.js<br/>/api/webhooks/kapso]
+    Backend -->|persiste| DB[(Supabase<br/>chats, messages,<br/>orders, customers)]
+    Backend -->|si chat.status=bot| Bot[State Machine<br/>+ Gemini fallback]
+    Bot -->|sendText/Buttons/List| Kapso
+    Kapso --> Cliente
+
+    DB <-->|GET con polling 4s| Frontend[Frontend Vite<br/>localhost:5173]
+    Operaria([👩 Operaria]) --> Frontend
+    Frontend -->|PATCH status| Backend
+    Frontend -->|takeover/release/send| Backend
+
+    Backend -->|sendText '🛵 va en camino'| Kapso
+
+    classDef api fill:#dbeafe,stroke:#3b82f6
+    classDef db fill:#dcfce7,stroke:#22c55e
+    classDef ext fill:#fff7ed,stroke:#fb923c
+    class Backend,Bot,Frontend api
+    class DB db
+    class Kapso,Cliente,Operaria ext
+      </pre>
+    </div>
+
+    <!-- ====================================================== -->
+    <h2 id="bot">2. Bot WhatsApp — state machine</h2>
+    <p>Cada chat tiene un <code>flow_state.step</code> en la BD. El handler dispatcha según el step actual.</p>
+
+    <div class="note">
+      <strong>Nota:</strong> Si el cliente escribe algo fuera del flujo (ej. "¿hasta qué hora abren?"), el bot reenvía el último prompt. Si pide hablar con humano o el flujo no puede continuar, escala a <code>chat.status='human'</code> y el bot se calla.
+    </div>
+
+    <div class="card">
+      <pre class="mermaid">
+flowchart TD
+    Inicio([Cliente saluda]) --> Persist[/Persiste msg 'in'/]
+    Persist --> CheckBot{chat.status?}
+    CheckBot -->|human| StopBot([Operaria responde<br/>desde el panel])
+    CheckBot -->|bot| LoadState[Carga flow_state]
+
+    LoadState --> Step{step actual?}
+
+    Step -->|null = primer contacto| Entry{¿Customer<br/>existe en BD?}
+    Entry -->|No| Consent["Saludo + consentimiento<br/><br/>[✅ Sí acepto] [❌ No]"]
+    Entry -->|Sí| MenuRec["¡Quihubo Edison! 🥪<br/>¿Hacés pedido?<br/><br/>[🥪 Nuevo pedido]<br/>[📋 Ver carta]<br/>[🙋 Humano]"]
+
+    Consent -->|click No| EndConsent([Termina])
+    Consent -->|click Sí| Menu["Menú principal<br/><br/>[🥪 Pedir]<br/>[📋 Ver carta]<br/>[🙋 Humano]"]
+
+    Menu -->|Pedir| RegNombre[Pide nombre]
+    Menu -->|Ver carta| CartaText[Manda carta como texto<br/>vuelve al menú]
+    Menu -->|Humano| Escalate[chat.status='human']
+
+    RegNombre --> RegEmail[Pide email]
+    RegEmail --> RegConfirm["Confirma datos<br/><br/>[✅ Sí, están bien]<br/>[✏️ Editar]"]
+    RegConfirm -->|Sí| ZonaList["Pide zona — LIST<br/><br/>• El Poblado $4.500<br/>• Envigado $5.500<br/>• Laureles $5.000<br/>• Fátima $6.000<br/>• Otra → escala"]
+
+    MenuRec -->|Nuevo pedido<br/>tiene addr guardada| DireccionConfirmRec["¿Misma dirección?<br/>📍 Cra 35 #8-71<br/><br/>[✅ Sí] [📍 Otra]"]
+    MenuRec -->|Ver carta| CartaText
+    MenuRec -->|Humano| Escalate
+
+    DireccionConfirmRec -->|Sí| Carta
+    DireccionConfirmRec -->|Otra| ZonaList
+
+    ZonaList -->|Otra| Escalate
+    ZonaList -->|Zona elegida| AddrText[Pide dirección completa]
+    AddrText --> AddrConfirm["Confirma dirección<br/><br/>[✅ Sí y guardar]<br/>[✏️ Cambiar]<br/>[⚠️ Sí sin guardar]"]
+    AddrConfirm -->|Cambiar| AddrText
+    AddrConfirm -->|Sí| Carta
+
+    Carta["Muestra carta — LIST<br/>4 secciones por categoría"]
+    Carta -->|Producto elegido| Cantidad["📸 foto + nombre + precio<br/><br/>[1] [2] [3+]"]
+
+    Cantidad --> AlgoMas["¿Algo más?<br/><br/>[➕ Agregar otro]<br/>[✅ Continuar]"]
+    AlgoMas -->|Agregar| Carta
+    AlgoMas -->|Continuar| Resumen["Resumen + total<br/><br/>2× Pastrami $56k<br/>🛵 Domicilio $4.5k<br/>Total $60.5k<br/><br/>[✅ Confirmar] [❌ Cancelar]"]
+
+    Resumen -->|Cancelar| Cancela([Cancela])
+    Resumen -->|Confirmar| CreateOrder[/POST /api/orders/]
+    CreateOrder --> Pago["Manda link Wompi<br/><br/>[💳 Pagar con Wompi]"]
+    Pago --> WaitPago([Espera pago])
+
+    classDef state fill:#fff7ed,stroke:#fb923c
+    classDef action fill:#dbeafe,stroke:#3b82f6
+    classDef terminal fill:#dcfce7,stroke:#22c55e
+    class Consent,MenuRec,Menu,RegConfirm,ZonaList,AddrConfirm,Carta,Cantidad,AlgoMas,Resumen,Pago,DireccionConfirmRec state
+    class Persist,CreateOrder,Escalate action
+    class StopBot,EndConsent,Cancela,WaitPago terminal
+      </pre>
+    </div>
+
+    <!-- ====================================================== -->
+    <h2 id="operario">3. Panel admin (operaria) — kanban y bandeja</h2>
+    <p>Lo que ve y hace la operaria en el panel web (http://localhost:5173).</p>
+
+    <div class="card">
+      <pre class="mermaid">
+flowchart TD
+    Open([Operaria abre panel<br/>localhost:5173]) --> Tabs{Tab elegido}
+
+    Tabs -->|Pedidos| KanbanLoad["GET /api/orders<br/>polling 4s"]
+    KanbanLoad --> KanbanShow["Kanban 6 columnas:<br/>nuevo → pagado → cocina<br/>→ empacado → ruta → entregado"]
+    KanbanShow --> Drag{Arrastra tarjeta}
+    Drag --> PatchOrder["PATCH /api/orders/id/status"]
+    PatchOrder --> IsRuta{nueva status = ruta?}
+    IsRuta -->|Sí| NotifWA["Bot manda WhatsApp:<br/>'Hola Edison, tu pedido va en camino 🛵'"]
+    IsRuta -->|No| OnlyDB[Solo actualiza BD]
+
+    Tabs -->|WhatsApp| ChatsLoad["GET /api/chats<br/>polling 4s"]
+    ChatsLoad --> ChatsList["Lista de conversaciones<br/>tabs: bot / humano / pendiente"]
+    ChatsList --> SelectChat{Click chat}
+    SelectChat --> MsgsLoad["GET /api/chats/:id/messages<br/>polling 2s"]
+    MsgsLoad --> ChatActions{Acciones}
+    ChatActions -->|Tomar conversación| Take["POST /api/chats/:id/takeover<br/>→ chat.status='human'"]
+    ChatActions -->|Reanudar bot| Release["POST /api/chats/:id/release<br/>→ chat.status='bot'"]
+    ChatActions -->|Escribir + enter| Send["POST /api/chats/:id/messages<br/>→ envía vía Kapso<br/>→ persiste direction='out'"]
+
+    Tabs -->|Catálogo| ProdLoad["GET /api/products<br/>polling 10s"]
+    ProdLoad --> ProdGrid["Grid de productos<br/>con switch availability"]
+    ProdGrid --> ToggleSwitch{Click switch}
+    ToggleSwitch --> PatchProduct["PATCH /api/products/:id<br/>→ products.available toggle"]
+
+    classDef view fill:#dbeafe,stroke:#3b82f6
+    classDef action fill:#fff7ed,stroke:#fb923c
+    classDef sideEffect fill:#dcfce7,stroke:#22c55e
+    class KanbanLoad,KanbanShow,ChatsLoad,ChatsList,MsgsLoad,ProdLoad,ProdGrid view
+    class PatchOrder,Take,Release,Send,PatchProduct,Drag,SelectChat,ChatActions,ToggleSwitch action
+    class NotifWA,OnlyDB sideEffect
+      </pre>
+    </div>
+
+    <!-- ====================================================== -->
+    <h2 id="wompi">4. Pasarela Wompi — checkout y webhook</h2>
+    <p>Cómo se cierra el pago (mock por ahora, listo para reemplazar por Wompi real).</p>
+
+    <div class="card">
+      <pre class="mermaid">
+flowchart LR
+    BotSend[Bot manda link<br/>Wompi al cliente] --> Cliente1([📱 Cliente abre<br/>el link])
+    Cliente1 --> Checkout[/wompi/checkout/:orderId<br/>página HTML/]
+    Checkout --> Botones{Cliente decide}
+    Botones -->|✅ Aprobar pago| Webhook[/POST /api/wompi/webhook<br/>status=APPROVED/]
+    Botones -->|❌ Rechazar| Noop[Solo log<br/>no cambia estado]
+
+    Webhook --> CheckNuevo{order.status = 'nuevo'?}
+    CheckNuevo -->|No| Idempotent[Ignora<br/>idempotente]
+    CheckNuevo -->|Sí| UpdatePagado["update orders<br/>SET status='pagado'"]
+
+    UpdatePagado --> Notif["Manda WhatsApp:<br/>'¡Edison, pago recibido!<br/>Tu pedido pasa a cocina 🥪'"]
+    Notif --> FinalState["chat.flow_state.step<br/>= 'finalizado'"]
+    FinalState --> KanbanAuto["Frontend ve el cambio<br/>(polling 4s) → tarjeta<br/>aparece en columna 'pagado'"]
+
+    classDef external fill:#fff7ed,stroke:#fb923c
+    classDef api fill:#dbeafe,stroke:#3b82f6
+    classDef state fill:#dcfce7,stroke:#22c55e
+    class Cliente1,Checkout,Botones,BotSend external
+    class Webhook,Notif api
+    class UpdatePagado,FinalState,KanbanAuto state
+      </pre>
+    </div>
+
+    <!-- ====================================================== -->
+    <h2 id="datos">5. Modelo de datos</h2>
+    <p>Las tablas Supabase y sus relaciones.</p>
+
+    <div class="card">
+      <pre class="mermaid">
+erDiagram
+    customers ||--o{ orders : "hace"
+    customers ||--o{ chats : "tiene"
+    zones ||--o{ customers : "vive en"
+    zones ||--o{ orders : "envío a"
+    zones ||--o{ chats : "zona"
+    orders ||--o{ order_items : "incluye"
+    products ||--o{ order_items : "vendido en"
+    chats ||--o{ messages : "contiene"
+
+    customers {
+        text id PK
+        text name
+        text phone UK
+        text addr
+        text zone_id FK
+        int pedidos
+        int ticket
+        text ultimo
+        float rating
+        enum tag "VIP|Recurrente|Nuevo"
+    }
+    orders {
+        text id PK
+        text customer_id FK
+        int total
+        text zone_id FK
+        enum status "nuevo|pagado|cocina|empacado|ruta|entregado"
+        int minutos
+        text address
+        text phone
+        text payment_method
+        text note
+        float lat
+        float lng
+        timestamp created_at
+        timestamp updated_at
+    }
+    order_items {
+        uuid id PK
+        text order_id FK
+        text product_id FK
+        int qty
+        int price_at_order
+    }
+    products {
+        text id PK
+        text name
+        int price
+        text cat
+        int sold
+        bool available
+        text img
+    }
+    zones {
+        text id PK
+        text name
+        int tarifa
+        int recargo
+        text color
+        float lat
+        float lng
+    }
+    chats {
+        text id PK "wa:phone"
+        text customer_id FK
+        text name
+        text phone
+        text last
+        text time
+        int unread
+        enum status "bot|human|pending"
+        text zone_id FK
+        jsonb flow_state
+        timestamp last_message_at
+    }
+    messages {
+        uuid id PK
+        text chat_id FK
+        enum direction "in|out|bot"
+        text body
+        text media_url
+        text kapso_message_id UK
+        timestamp created_at
+        timestamp delivered_at
+        timestamp read_at
+    }
+    webhook_events {
+        text idempotency_key PK
+        text type
+        jsonb payload
+        timestamp processed_at
+    }
+      </pre>
+    </div>
+
+    <footer style="margin-top: 64px; padding-top: 24px; border-top: 1px solid var(--border); color: var(--muted); font-size: 13px; text-align: center;">
+      Generado con Mermaid. Para editar online → <a href="https://mermaid.live" style="color: var(--accent);">mermaid.live</a>
+    </footer>
+  </div>
+</body>
+</html>
