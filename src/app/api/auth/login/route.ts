@@ -56,6 +56,14 @@ export async function POST(request: NextRequest) {
         id: data.user.id,
         email: data.user.email,
       },
+      // Devolvemos también los tokens en el body para que el frontend
+      // cross-origin los guarde en localStorage y los mande en el header
+      // Authorization. En same-origin las cookies bs_session ya bastan.
+      session: {
+        accessToken: data.session.access_token,
+        refreshToken: data.session.refresh_token,
+        expiresAt: data.session.expires_at,
+      },
     }),
     {
       status: 200,

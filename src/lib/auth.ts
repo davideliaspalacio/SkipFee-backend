@@ -38,20 +38,21 @@ export function authClient() {
  */
 export function buildSessionCookies(opts: SessionCookieValue): string[] {
   const isProd = env.NODE_ENV === 'production';
-  // El access_token de Supabase dura 1h por default. La cookie expira en 1h.
-  // El refresh_token dura más; lo guardamos por 30 días para que el panel
-  // mantenga la sesión sin pedir login todos los días.
+  // SameSite=None permite que las cookies viajen cross-origin (frontend
+  // en :5173 → backend en :3000, o frontend en otro dominio en prod).
+  // En localhost los browsers aceptan SameSite=None sin Secure; en prod
+  // sí exige HTTPS y agregamos Secure automáticamente.
   const access = serializeCookie(SESSION_COOKIE_NAME, opts.accessToken, {
     httpOnly: true,
     secure: isProd,
-    sameSite: 'lax',
+    sameSite: 'none',
     path: '/',
     maxAge: 60 * 60, // 1h
   });
   const refresh = serializeCookie(REFRESH_COOKIE_NAME, opts.refreshToken, {
     httpOnly: true,
     secure: isProd,
-    sameSite: 'lax',
+    sameSite: 'none',
     path: '/',
     maxAge: 60 * 60 * 24 * 30, // 30d
   });
@@ -100,7 +101,15 @@ function cap(s: string): string {
 export async function getSessionUser(
   request: NextRequest,
 ): Promise<{ user: User; refreshedTokens?: SessionCookieValue } | null> {
-  const accessToken = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  // Aceptamos el token en 3 formas (en orden de preferencia):
+  //  1. Header Authorization: Bearer <token>  ← lo usa el frontend cross-origin
+  //  2. Cookie bs_session                     ← same-origin (proxy o prod)
+  //  3. Refresh con cookie bs_refresh         ← fallback si access vencido
+  const authHeader = request.headers.get('authorization');
+  const bearerToken = authHeader?.toLowerCase().startsWith('bearer ')
+    ? authHeader.slice(7).trim()
+    : null;
+  const accessToken = bearerToken ?? request.cookies.get(SESSION_COOKIE_NAME)?.value;
   const refreshToken = request.cookies.get(REFRESH_COOKIE_NAME)?.value;
 
   const supabase = authClient();
