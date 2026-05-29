@@ -22,6 +22,7 @@ const DAY_ABBR = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 
 interface OrderRow {
   id: string;
+  order_number: number;
   total: number;
   status: string;
   created_at: string;
@@ -48,7 +49,7 @@ export async function GET() {
   // Una sola query con los pedidos de los últimos 7 días
   const { data: orders, error: ordersErr } = await sb
     .from('orders')
-    .select('id, total, status, created_at, address, phone, customer:customers(name)')
+    .select('id, order_number, total, status, created_at, address, phone, customer:customers(name)')
     .gte('created_at', sevenDaysAgo.toISOString())
     .order('created_at', { ascending: false });
 
@@ -133,6 +134,7 @@ export async function GET() {
     .slice(0, 4)
     .map(o => ({
       id: o.id,
+      number: o.order_number,
       cliente: pickOne(o.customer as OrderRow['customer'])?.name ?? '—',
       status: o.status,
       minutos: o.minutes,

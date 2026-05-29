@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ORDER_SELECT = `
-  id, total, status, address, phone, payment_method, note, lat, lng, created_at,
+  id, order_number, total, status, address, phone, payment_method, note, lat, lng, created_at,
   customer:customers(id, name),
   zone:zones(id, name),
   items:order_items(qty, product:products(name))

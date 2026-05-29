@@ -9,14 +9,6 @@ export const dynamic = 'force-dynamic';
 
 const ORDER_STATUSES = ['nuevo', 'pagado', 'cocina', 'empacado', 'ruta', 'entregado'] as const;
 type OrderStatus = (typeof ORDER_STATUSES)[number];
-const statusOrder: Record<OrderStatus, number> = {
-  nuevo: 0,
-  pagado: 1,
-  cocina: 2,
-  empacado: 3,
-  ruta: 4,
-  entregado: 5,
-};
 
 const bodySchema = z.object({
   status: z.enum(ORDER_STATUSES),
@@ -26,12 +18,16 @@ const bodySchema = z.object({
  * PATCH /api/orders/:id/status
  *
  * Reglas:
- * - Solo avanza (no retrocede): si new_status <= current_status → 409
- * - Side effect: si transición es a 'ruta', enviar WhatsApp al cliente
- *   "Hola {name}, tu pedido va en camino 🛵"
+ * - Permite cualquier transición (avance o reverso) entre estados válidos.
+ *   El reverso existe para cuando una operaria mueve un pedido por error.
+ * - Side effect: en la PRIMERA transición a 'ruta' se envía un WhatsApp
+ *   al cliente ("Hola {name}, tu pedido va en camino 🛵"). Si el pedido
+ *   se devuelve y vuelve a 'ruta', NO se reenvía (idempotente vía
+ *   orders.route_notified_at).
+ * - Si new_status === current_status, responde 200 noop sin tocar BD.
  *
  * Llamado por:
- * - Frontend (operario arrastra tarjeta en el kanban)
+ * - Frontend (operario arrastra tarjeta en el kanban — en cualquier dirección)
  * - Wompi webhook (nuevo→pagado automático)
  */
 export async function PATCH(
@@ -55,7 +51,7 @@ export async function PATCH(
   // 1. Obtener orden actual con nombre del customer (para el mensaje WhatsApp)
   const { data: order, error: getErr } = await sb
     .from('orders')
-    .select('id, status, phone, customer:customers(name)')
+    .select('id, status, phone, route_notified_at, customer:customers(name)')
     .eq('id', id)
     .single();
 
@@ -66,18 +62,19 @@ export async function PATCH(
   const currentStatus = order.status as OrderStatus;
   const newStatus = parsed.status;
 
-  // 2. Validar transición (solo avance permitido)
-  if (statusOrder[newStatus] <= statusOrder[currentStatus]) {
-    return Response.json(
-      {
-        ok: false,
-        error: `No se puede mover de "${currentStatus}" a "${newStatus}". Solo se permite avanzar.`,
-      },
-      { status: 409 },
-    );
+  // 2. Noop si no cambia el estado (operario suelta la tarjeta en su misma columna)
+  if (currentStatus === newStatus) {
+    return Response.json({
+      ok: true,
+      orderId: id,
+      from: currentStatus,
+      to: newStatus,
+      noop: true,
+      notification: null,
+    });
   }
 
-  // 3. Aplicar cambio
+  // 3. Aplicar cambio (cualquier dirección permitida)
   const { error: updErr } = await sb
     .from('orders')
     .update({ status: newStatus })
@@ -88,9 +85,10 @@ export async function PATCH(
     return Response.json({ ok: false, error: updErr.message }, { status: 500 });
   }
 
-  // 4. Side effect: si pasa a 'ruta', notificar al cliente
+  // 4. Side effect: en la PRIMERA transición a 'ruta', notificar al cliente.
+  //    Si ya se notificó antes (route_notified_at != null), no reenviamos.
   let notificationSent: { ok: boolean; error?: string } | null = null;
-  if (newStatus === 'ruta') {
+  if (newStatus === 'ruta' && !order.route_notified_at) {
     // Postgrest devuelve la relación como objeto o array según multiplicidad — normalizamos.
     const customerName = Array.isArray(order.customer)
       ? order.customer[0]?.name
@@ -108,6 +106,15 @@ export async function PATCH(
         body,
         kapsoMessageId: wamid,
       });
+      // Marcar notificación efectiva para que reverso + re-avance no duplique mensaje.
+      const { error: markErr } = await sb
+        .from('orders')
+        .update({ route_notified_at: new Date().toISOString() })
+        .eq('id', id);
+      if (markErr) {
+        // El mensaje ya salió; loguear pero no fallar.
+        console.error('[orders/status] mark route_notified_at error', markErr);
+      }
       notificationSent = { ok: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

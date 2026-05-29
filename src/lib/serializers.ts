@@ -8,6 +8,7 @@
 
 interface OrderRow {
   id: string;
+  order_number: number;
   total: number;
   status: string;
   address: string;
@@ -44,6 +45,7 @@ export function serializeOrder(row: OrderRow) {
 
   return {
     id: row.id,
+    number: row.order_number,
     cliente: customer?.name ?? '',
     items: itemList.join(', '),
     itemList,
