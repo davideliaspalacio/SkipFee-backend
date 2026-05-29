@@ -169,7 +169,7 @@ export async function POST(request: NextRequest) {
 
   // 2. Verificar zona + settings y calcular delivery
   const [{ data: zone, error: zErr }, { data: settings, error: setErr }] = await Promise.all([
-    sb.from('zones').select('id, name, tarifa, recargo').eq('id', parsed.zoneId).single(),
+    sb.from('zones').select('id, name, tarifa, recargo, lat, lng').eq('id', parsed.zoneId).single(),
     sb
       .from('settings')
       .select('peak_start, peak_end, base_delivery_fee')
@@ -226,8 +226,8 @@ export async function POST(request: NextRequest) {
       phone: parsed.customer.phone,
       payment_method: parsed.paymentMethod,
       note: parsed.note ?? null,
-      lat: parsed.lat ?? zone.id === 'poblado' ? 6.2087 : 0, // best-effort fallback
-      lng: parsed.lng ?? -75.5658,
+      lat: parsed.lat ?? zone.lat,
+      lng: parsed.lng ?? zone.lng,
     })
     .select('id')
     .single();
