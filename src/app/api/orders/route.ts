@@ -92,6 +92,34 @@ export async function POST(request: NextRequest) {
 
   const sb = supabaseAdmin();
 
+  // 0. Rate limit por teléfono: máximo 10 pedidos por hora.
+  //    Esto evita abuso del bot (un cliente disparado o malicioso).
+  //    Si querés afinarlo (ej. exceptuar VIPs, ventanas distintas, IP),
+  //    aquí es el lugar.
+  const ONE_HOUR_AGO = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  const RATE_LIMIT_PER_HOUR = 10;
+  const { count: recentCount, error: rlErr } = await sb
+    .from('orders')
+    .select('id', { count: 'exact', head: true })
+    .eq('phone', parsed.customer.phone)
+    .gte('created_at', ONE_HOUR_AGO);
+  if (rlErr) {
+    console.error('[orders POST] rate limit check failed', rlErr);
+    // No queremos bloquear si la query de rate-limit falla — fallback a permitir.
+  } else if ((recentCount ?? 0) >= RATE_LIMIT_PER_HOUR) {
+    return Response.json(
+      {
+        ok: false,
+        error: `Llegaste al máximo de ${RATE_LIMIT_PER_HOUR} pedidos por hora. Intentá de nuevo más tarde.`,
+        retryAfterSeconds: 3600,
+      },
+      {
+        status: 429,
+        headers: { 'Retry-After': '3600' },
+      },
+    );
+  }
+
   // 1. Resolver productos
   const productIds = parsed.items.map(i => i.productId);
   const { data: products, error: prodErr } = await sb
