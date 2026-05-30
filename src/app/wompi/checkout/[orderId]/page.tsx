@@ -27,7 +27,7 @@ export default async function MockCheckout({
   const { data: order } = await sb
     .from('orders')
     .select(
-      'id, status, total, address, phone, payment_method, items:order_items(qty, price_at_order, product:products(name))',
+      'id, order_number, status, total, address, phone, payment_method, items:order_items(qty, price_at_order, product:products(name))',
     )
     .eq('id', orderId)
     .single();
@@ -51,7 +51,7 @@ export default async function MockCheckout({
         </p>
       </div>
 
-      <h1 style={{ fontSize: 24, margin: '0 0 8px' }}>Pedido #{order.id.slice(0, 8).toUpperCase()}</h1>
+      <h1 style={{ fontSize: 24, margin: '0 0 8px' }}>Pedido #{String(order.order_number).padStart(3, '0')}</h1>
       <p style={{ color: '#666', margin: '0 0 24px' }}>Estado: {order.status}</p>
 
       <h2 style={{ fontSize: 18, margin: '0 0 12px' }}>Detalles</h2>
