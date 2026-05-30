@@ -32,6 +32,7 @@ const PUBLIC_PREFIXES = [
   '/api/webhooks/',
   '/api/wompi/webhook',
   '/api/products/available',
+  '/api/cron/',
 ];
 
 /**
