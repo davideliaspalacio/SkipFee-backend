@@ -6,6 +6,7 @@ import { bogotaTime, isWithinRange } from '@/lib/pricing';
 import type { FlowState } from './state';
 import { emptyFlowState } from './state';
 import type { IncomingMessage } from './parser';
+import { assistOffScript } from './gemini-fallback';
 
 const PRIVACY_POLICY_URL = 'https://brosandsubs.com/politica-datos';
 const MAX_CART_ITEMS = 20;
@@ -203,7 +204,13 @@ export async function handleMenuPrincipal(ctx: HandlerContext): Promise<FlowStat
   if (choice === 'menu_humano') {
     return escalarHumano(ctx, 'cliente pidió hablar con humano desde menú');
   }
-  return reenviarMenu(ctx);
+  // Texto libre o botón desconocido → Gemini interpreta o reenvía
+  return manejarTextoLibre({
+    ctx,
+    stepDescription: 'menú principal con opciones Pedir / Ver carta / Humano',
+    lastBotPrompt: '¡Perfecto! 😊 ¿Cómo te ayudo? (botones: Pedir, Ver carta, Humano)',
+    reprompt: () => reenviarMenu(ctx),
+  });
 }
 
 // =========================================================================
@@ -665,7 +672,28 @@ export async function handleAlgoMas(ctx: HandlerContext): Promise<FlowState> {
   if (choice === 'mas_no') {
     return mostrarResumen(ctx.state, ctx);
   }
-  return ctx.state;
+  // Texto libre o botón desconocido → Gemini interpreta o reenvía
+  return manejarTextoLibre({
+    ctx,
+    stepDescription: `cliente armando carrito, ya tiene ${ctx.state.cart.items.length} producto(s) y debe decidir si agregar más o continuar al pago`,
+    lastBotPrompt: '¿Algo más? Botones: Agregar más / Continuar al pago.',
+    reprompt: async () => {
+      await botSendInteractive({
+        to: ctx.phone,
+        preview: '[reenvío ¿algo más?]',
+        send: () =>
+          sendButtons({
+            to: ctx.phone,
+            body: '¿Algo más?',
+            buttons: [
+              { id: 'mas_si', title: '➕ Agregar más' },
+              { id: 'mas_no', title: '✅ Continuar' },
+            ],
+          }),
+      });
+      return ctx.state;
+    },
+  });
 }
 
 // =========================================================================
@@ -723,7 +751,15 @@ export async function handleResumen(ctx: HandlerContext): Promise<FlowState> {
     await botSendText({ to: ctx.phone, body: 'Listo parce, lo cancelamos. Cuando quieras pedir de nuevo me escribís 👋' });
     return { ...emptyFlowState(), step: 'finalizado' };
   }
-  if (choice !== 'pay_yes') return ctx.state;
+  if (choice !== 'pay_yes') {
+    // Texto libre o botón desconocido → Gemini interpreta o reenvía el resumen
+    return manejarTextoLibre({
+      ctx,
+      stepDescription: 'cliente revisando el resumen del pedido antes del pago',
+      lastBotPrompt: 'Resumen del pedido + total. Dos botones: Confirmar / Cancelar.',
+      reprompt: () => mostrarResumen(ctx.state, ctx),
+    });
+  }
 
   // Crear el pedido vía endpoint interno
   const origin = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
@@ -824,6 +860,48 @@ export async function cancelarFlujo(ctx: HandlerContext): Promise<FlowState> {
     body: 'Listo, lo dejamos así. Cuando quieras retomar me escribís y empezamos de cero 🥪',
   });
   return emptyFlowState();
+}
+
+/**
+ * Manejo de texto libre cuando el cliente NO clickeó el botón/list esperado.
+ * Llama a Gemini para interpretar el mensaje y decidir si cancelar, escalar
+ * o continuar (con respuesta clarificadora + reenvío del prompt original).
+ *
+ * Los handlers lo invocan en lugar de devolver `ctx.state` mudo. El caller
+ * pasa una función `reprompt` que vuelve a mostrar el prompt original del
+ * step (botones / list / pregunta), para que después de la respuesta del
+ * bot el cliente sepa cómo seguir.
+ */
+export async function manejarTextoLibre(opts: {
+  ctx: HandlerContext;
+  stepDescription: string;
+  lastBotPrompt: string;
+  reprompt: () => Promise<FlowState>;
+}): Promise<FlowState> {
+  const userText = opts.ctx.incoming.text?.trim() ?? '';
+  // Sin texto (ej. media, ubicación) → solo reenviar el prompt
+  if (!userText) return opts.reprompt();
+
+  const result = await assistOffScript({
+    stepDescription: opts.stepDescription,
+    lastBotPrompt: opts.lastBotPrompt,
+    userText,
+  });
+
+  if (result.intent === 'cancel') {
+    // Reusamos el mensaje del modelo si fue distinto al genérico de cancelarFlujo
+    await botSendText({ to: opts.ctx.phone, body: result.reply });
+    return emptyFlowState();
+  }
+  if (result.intent === 'human') {
+    await botSendText({ to: opts.ctx.phone, body: result.reply });
+    await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', opts.ctx.chatId);
+    return { ...opts.ctx.state, step: 'finalizado' };
+  }
+
+  // 'continue' → respondemos clarificación + reenviamos el prompt original
+  await botSendText({ to: opts.ctx.phone, body: result.reply });
+  return opts.reprompt();
 }
 
 /**
