@@ -14,6 +14,7 @@ import {
   handleDireccionConfirmar,
   handleCarta,
   handleCantidad,
+  handleCantidadCustom,
   handleAlgoMas,
   handleResumen,
   handlePago,
@@ -72,6 +73,7 @@ async function dispatch(ctx: HandlerContext): Promise<FlowState> {
     case 'direccion_confirmar':  return handleDireccionConfirmar(ctx);
     case 'carta':                return handleCarta(ctx);
     case 'cantidad':             return handleCantidad(ctx);
+    case 'cantidad_custom':      return handleCantidadCustom(ctx);
     case 'algo_mas':             return handleAlgoMas(ctx);
     case 'resumen':              return handleResumen(ctx);
     case 'pago':                 return handlePago(ctx);

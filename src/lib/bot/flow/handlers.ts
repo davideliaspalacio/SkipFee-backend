@@ -550,25 +550,68 @@ export async function handleCantidad(ctx: HandlerContext): Promise<FlowState> {
     return { ...ctx.state, step: 'carta' };
   }
   const choice = ctx.incoming.buttonReplyId;
+
+  // "3+" abre un sub-step que pide el número exacto por texto.
+  // Los botones 1 y 2 sí setean qty directamente.
+  if (choice === 'qty_3') {
+    await botSendText({
+      to: ctx.phone,
+      body: '¿Cuántos vas a querer? Mandame el número (entre 3 y 20):',
+    });
+    return { ...ctx.state, step: 'cantidad_custom' };
+  }
+
   let qty: number | null = null;
   if (choice === 'qty_1') qty = 1;
   else if (choice === 'qty_2') qty = 2;
-  else if (choice === 'qty_3') qty = 3;
   else if (ctx.incoming.text) {
     const n = parseInt(ctx.incoming.text.replace(/[^\d]/g, ''), 10);
     if (!isNaN(n) && n > 0 && n <= 20) qty = n;
   }
 
   if (!qty) {
-    if (choice === 'qty_3' || (ctx.incoming.text && ctx.incoming.text.length > 0)) {
-      await botSendText({ to: ctx.phone, body: 'Decime el número exacto (entre 1 y 20):' });
-    } else {
-      await botSendText({ to: ctx.phone, body: 'Elegí cuántos vas a querer (1, 2, o 3+):' });
-    }
+    await botSendText({ to: ctx.phone, body: 'Elegí cuántos vas a querer (1, 2, o 3+):' });
     return ctx.state;
   }
 
-  // Lookup del producto
+  return agregarItemYContinuar(ctx, productId, qty);
+}
+
+/**
+ * Step que aparece cuando el cliente clickeó "3+" en handleCantidad.
+ * Espera que escriba un número (3-20). Si manda otra cosa, re-pide.
+ */
+export async function handleCantidadCustom(ctx: HandlerContext): Promise<FlowState> {
+  const productId = ctx.state.cart.pendingProductId;
+  if (!productId) {
+    await mostrarCartaList(ctx);
+    return { ...ctx.state, step: 'carta' };
+  }
+
+  const text = ctx.incoming.text ?? '';
+  const n = parseInt(text.replace(/[^\d]/g, ''), 10);
+
+  if (isNaN(n) || n < 1 || n > 20) {
+    await botSendText({
+      to: ctx.phone,
+      body: 'Necesito un número entre 1 y 20. Mandalo así:  *5*',
+    });
+    return ctx.state;
+  }
+
+  return agregarItemYContinuar(ctx, productId, n);
+}
+
+/**
+ * Helper compartido por handleCantidad y handleCantidadCustom.
+ * Busca el producto, lo agrega al carrito y pasa al step 'algo_mas'.
+ * Si el carrito llegó al máximo, salta directo al resumen.
+ */
+async function agregarItemYContinuar(
+  ctx: HandlerContext,
+  productId: string,
+  qty: number,
+): Promise<FlowState> {
   const { data: product } = await supabaseAdmin()
     .from('products')
     .select('id, name, price')
@@ -583,10 +626,10 @@ export async function handleCantidad(ctx: HandlerContext): Promise<FlowState> {
   const newItems = [...ctx.state.cart.items, { productId: product.id, name: product.name, qty, price: product.price }];
   if (newItems.length >= MAX_CART_ITEMS) {
     await botSendText({ to: ctx.phone, body: 'Llegamos al máximo del carrito. Vamos al pago.' });
-    return mostrarResumen({
-      ...ctx.state,
-      cart: { items: newItems, pendingProductId: undefined },
-    }, ctx);
+    return mostrarResumen(
+      { ...ctx.state, cart: { items: newItems, pendingProductId: undefined } },
+      ctx,
+    );
   }
 
   await botSendInteractive({
@@ -718,14 +761,15 @@ export async function handleResumen(ctx: HandlerContext): Promise<FlowState> {
       .eq('phone', ctx.phone);
   }
 
-  // Mandar link de pago
+  // Mandar link de pago con el número visible del pedido
+  const orderLabel = body.orderNumber ? `#${String(body.orderNumber).padStart(3, '0')}` : '';
   await botSendInteractive({
     to: ctx.phone,
     preview: '[link pago Wompi]',
     send: () =>
       sendCtaUrl({
         to: ctx.phone,
-        body: '¡Excelente! 🎉 Aquí está el link de pago. Apenas lo completes te confirmo y el pedido pasa a cocina 🥪',
+        body: `¡Excelente! 🎉 Tu pedido ${orderLabel} quedó listo.\nApenas completes el pago te confirmo y pasa a cocina 🥪`,
         displayText: '💳 Pagar con Wompi',
         url: body.paymentLink,
       }),
