@@ -18,8 +18,39 @@ import {
   handleResumen,
   handlePago,
   handleFinalizado,
+  escalarHumano,
+  cancelarFlujo,
   type HandlerContext,
 } from './handlers';
+
+/**
+ * Palabras clave que el cliente puede escribir en CUALQUIER step del flujo
+ * para escapar del happy path. Se evalúan antes del dispatch del handler
+ * del step actual.
+ *
+ * - cancelar: limpia el flow_state y se despide; el chat sigue en modo bot
+ * - humano:   transfiere el chat a status='human'; el bot deja de responder
+ * - ayuda:    también transfiere a humano (más simple que armar un menú
+ *             contextual; lo podemos refinar después con un agente Gemini)
+ */
+const GLOBAL_KEYWORDS: Record<'cancelar' | 'humano' | 'ayuda', string[]> = {
+  cancelar: ['cancelar', 'cancel', 'salir', 'parar', 'stop', 'olvidalo', 'olvídalo'],
+  humano: ['humano', 'asesor', 'persona', 'agente', 'operador', 'operadora'],
+  ayuda: ['ayuda', 'help', 'no entiendo', 'no se', 'no sé'],
+};
+
+function detectGlobalIntent(text: string | undefined): keyof typeof GLOBAL_KEYWORDS | null {
+  if (!text) return null;
+  const norm = text.toLowerCase().trim();
+  if (norm.length === 0 || norm.length > 60) return null; // ignora mensajes largos
+  for (const [intent, kws] of Object.entries(GLOBAL_KEYWORDS) as Array<[
+    keyof typeof GLOBAL_KEYWORDS,
+    string[],
+  ]>) {
+    if (kws.some(k => norm === k || norm.startsWith(k + ' '))) return intent;
+  }
+  return null;
+}
 
 /**
  * Orchestrator del state machine del bot.
@@ -60,6 +91,14 @@ export async function processFlowMessage(opts: {
 }
 
 async function dispatch(ctx: HandlerContext): Promise<FlowState> {
+  // Layer global de keywords: aplica en cualquier step antes del handler.
+  // Solo cuando el cliente escribe texto (no en button/list replies).
+  const intent = ctx.incoming.text ? detectGlobalIntent(ctx.incoming.text) : null;
+  if (intent === 'cancelar') return cancelarFlujo(ctx);
+  if (intent === 'humano' || intent === 'ayuda') {
+    return escalarHumano(ctx, `keyword: ${intent}`);
+  }
+
   switch (ctx.state.step) {
     case 'consentimiento':       return handleConsentimiento(ctx);
     case 'menu_principal':       return handleMenuPrincipal(ctx);
