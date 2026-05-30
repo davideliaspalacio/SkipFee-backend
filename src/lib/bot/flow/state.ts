@@ -14,7 +14,8 @@ export type FlowStep =
   | 'direccion_texto'        // pidiendo dirección textual
   | 'direccion_confirmar'    // confirmar dirección + ¿guardar?
   | 'carta'                  // esperando selección producto
-  | 'cantidad'               // esperando cantidad del producto elegido
+  | 'cantidad'               // esperando cantidad del producto elegido (botones 1/2/3+)
+  | 'cantidad_custom'        // cliente clickeó "3+", esperando número exacto por texto
   | 'algo_mas'               // ¿agregar más o continuar?
   | 'resumen'                // resumen + confirmar
   | 'pago'                   // link Wompi enviado, esperando webhook

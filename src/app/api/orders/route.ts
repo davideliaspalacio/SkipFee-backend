@@ -229,7 +229,7 @@ export async function POST(request: NextRequest) {
       lat: parsed.lat ?? zone.lat,
       lng: parsed.lng ?? zone.lng,
     })
-    .select('id')
+    .select('id, order_number')
     .single();
 
   if (ordErr || !order) {
@@ -253,6 +253,7 @@ export async function POST(request: NextRequest) {
   return Response.json({
     ok: true,
     orderId: order.id,
+    orderNumber: order.order_number,
     subtotal,
     delivery,
     peakSurcharge: isPeak ? zone.recargo : 0,
