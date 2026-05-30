@@ -758,7 +758,7 @@ export async function handleFinalizado(ctx: HandlerContext): Promise<FlowState> 
 // Helpers de escalado y reenvío
 // =========================================================================
 
-async function escalarHumano(ctx: HandlerContext, razon: string): Promise<FlowState> {
+export async function escalarHumano(ctx: HandlerContext, razon: string): Promise<FlowState> {
   await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', ctx.chatId);
   console.log('[bot] escalado a humano', { chatId: ctx.chatId, razon });
   await botSendText({
@@ -766,6 +766,41 @@ async function escalarHumano(ctx: HandlerContext, razon: string): Promise<FlowSt
     body: 'Te paso con uno de mis compas humanos, ya te responde en un momentico 🙏',
   });
   return { ...ctx.state, step: 'finalizado' };
+}
+
+/**
+ * Cancelación explícita por el cliente (palabra clave "cancelar" / "salir").
+ * Limpia el flow_state y se despide con un mensaje cordial. El chat sigue
+ * en modo bot — si el cliente vuelve a saludar, arranca de cero.
+ */
+export async function cancelarFlujo(ctx: HandlerContext): Promise<FlowState> {
+  console.log('[bot] flujo cancelado por el cliente', { chatId: ctx.chatId });
+  await botSendText({
+    to: ctx.phone,
+    body: 'Listo, lo dejamos así. Cuando quieras retomar me escribís y empezamos de cero 🥪',
+  });
+  return emptyFlowState();
+}
+
+/**
+ * Manda un mensaje genérico de "tuve un problema" y escala a humano.
+ * Lo invoca el webhook cuando processFlowMessage lanza una excepción que
+ * NO fue manejada por ningún handler.
+ */
+export async function manejarErrorInesperado(opts: {
+  chatId: string;
+  phone: string;
+}): Promise<void> {
+  try {
+    await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', opts.chatId);
+    await botSendText({
+      to: opts.phone,
+      body: 'Tuvimos un problema procesando tu mensaje. Te paso con uno de mis compas humanos 🙏',
+    });
+  } catch (err) {
+    // Si esto también falla no hay mucho que hacer; al menos el log queda
+    console.error('[bot] manejarErrorInesperado fallback fail', err);
+  }
 }
 
 async function reenviarMenu(ctx: HandlerContext): Promise<FlowState> {
