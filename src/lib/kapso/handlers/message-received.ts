@@ -94,8 +94,13 @@ export async function handleMessageReceived(payload: unknown): Promise<void> {
 
   if (chat?.status === 'bot') {
     const incoming = parseIncoming(message);
-    void processFlowMessage({ chatId, phone, contactName, message: incoming }).catch(err => {
+    // Fire-and-forget: el webhook ya devolvió 200 a Kapso. Si el flujo del
+    // bot falla, escalamos a humano automáticamente para que el cliente
+    // no quede colgado sin respuesta y la operaria tenga contexto.
+    void processFlowMessage({ chatId, phone, contactName, message: incoming }).catch(async err => {
       console.error('[bot] error en processFlowMessage', { chatId, err });
+      const { manejarErrorInesperado } = await import('@/lib/bot/flow/handlers');
+      await manejarErrorInesperado({ chatId, phone });
     });
   }
 }
