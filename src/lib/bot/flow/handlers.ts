@@ -639,61 +639,128 @@ async function agregarItemYContinuar(
     );
   }
 
+  // Confirmación corta + quick-pick para agregar más (sin volver a la carta).
+  await botSendText({
+    to: ctx.phone,
+    body: `Listo, ${qty}× ${product.name} agregados 🥪`,
+  });
+  return mostrarAlgoMas({
+    ...ctx,
+    state: { ...ctx.state, cart: { items: newItems, pendingProductId: undefined } },
+  });
+}
+
+// =========================================================================
+// ALGO MÁS — quick-pick de top 3 productos + opciones
+// =========================================================================
+
+/**
+ * Quick-pick: top 3 productos más vendidos que NO están ya en el carrito,
+ * para que el cliente pueda agregarlos en un solo tap sin tener que volver
+ * a la carta completa. Cuando ya pidió los 3 top, simplemente caen
+ * productos siguientes en sold desc.
+ */
+async function mostrarAlgoMas(ctx: HandlerContext): Promise<FlowState> {
+  const cartProductIds = new Set(ctx.state.cart.items.map(i => i.productId));
+  const { data: topProducts } = await supabaseAdmin()
+    .from('products')
+    .select('id, name, price')
+    .eq('available', true)
+    .order('sold', { ascending: false })
+    .limit(8);
+
+  // Filtramos los que ya están en el carrito y nos quedamos con 3.
+  const quickPick = (topProducts ?? []).filter(p => !cartProductIds.has(p.id)).slice(0, 3);
+
+  // Resumen breve del carrito actual para el body del mensaje.
+  const cartLines = ctx.state.cart.items.map(i => `• ${i.qty}× ${i.name}`).join('\n');
+  const body = `🛒 *Tu carrito:*\n${cartLines}\n\n¿Querés algo más?`;
+
   await botSendInteractive({
     to: ctx.phone,
-    preview: '[¿algo más?]',
+    preview: '[¿algo más? quick-pick]',
+    send: () =>
+      sendList({
+        to: ctx.phone,
+        body,
+        buttonText: 'Elegir',
+        sections: [
+          ...(quickPick.length > 0
+            ? [{
+                title: 'Más vendidos',
+                rows: quickPick.map(p => ({
+                  id: `quick_${p.id}`,
+                  title: p.name.slice(0, 24),
+                  description: COP(p.price),
+                })),
+              }]
+            : []),
+          {
+            title: 'Otras opciones',
+            rows: [
+              { id: 'algomas_carta', title: 'Ver carta completa', description: 'Buscar otro producto' },
+              { id: 'algomas_continuar', title: '✅ Continuar al pago', description: 'Cerrar el pedido' },
+            ],
+          },
+        ],
+      }),
+  });
+  return { ...ctx.state, step: 'algo_mas' };
+}
+
+export async function handleAlgoMas(ctx: HandlerContext): Promise<FlowState> {
+  const choice = ctx.incoming.listReplyId ?? ctx.incoming.buttonReplyId;
+
+  // Compatibilidad con buttons viejos (mas_si / mas_no) por si quedó algún
+  // chat in-flight desde antes del cambio a List.
+  if (choice === 'algomas_continuar' || choice === 'mas_no') {
+    return mostrarResumen(ctx.state, ctx);
+  }
+  if (choice === 'algomas_carta' || choice === 'mas_si') {
+    await mostrarCartaList(ctx);
+    return { ...ctx.state, step: 'carta' };
+  }
+
+  // Quick-pick: el id viene como 'quick_<productId>'. Agregamos al carrito
+  // y vamos directo a cantidad (skip de la carta).
+  if (choice && choice.startsWith('quick_')) {
+    const productId = choice.slice('quick_'.length);
+    return pedirCantidad(ctx, productId);
+  }
+
+  // Texto libre o botón desconocido → Gemini interpreta o reenvía el quick-pick
+  return manejarTextoLibre({
+    ctx,
+    stepDescription: `cliente armando carrito, ya tiene ${ctx.state.cart.items.length} producto(s) y debe decidir si agregar más o continuar al pago`,
+    lastBotPrompt: '¿Querés algo más? (lista con productos sugeridos, ver carta completa o continuar al pago)',
+    reprompt: () => mostrarAlgoMas(ctx),
+  });
+}
+
+/**
+ * Helper: arranca el step 'cantidad' para un productId. Lo usan tanto
+ * handleCarta (cuando se elige del list) como handleAlgoMas (quick-pick).
+ */
+async function pedirCantidad(ctx: HandlerContext, productId: string): Promise<FlowState> {
+  await botSendInteractive({
+    to: ctx.phone,
+    preview: '[pedir cantidad]',
     send: () =>
       sendButtons({
         to: ctx.phone,
-        body: `Listo, ${qty}× ${product.name} agregados 🥪 ¿Algo más?`,
+        body: '¿Cuántos vas a querer?',
         buttons: [
-          { id: 'mas_si', title: '➕ Agregar más' },
-          { id: 'mas_no', title: '✅ Continuar' },
+          { id: 'qty_1', title: '1' },
+          { id: 'qty_2', title: '2' },
+          { id: 'qty_3', title: '3+' },
         ],
       }),
   });
   return {
     ...ctx.state,
-    step: 'algo_mas',
-    cart: { items: newItems, pendingProductId: undefined },
+    step: 'cantidad',
+    cart: { ...ctx.state.cart, pendingProductId: productId },
   };
-}
-
-// =========================================================================
-// ALGO MÁS
-// =========================================================================
-
-export async function handleAlgoMas(ctx: HandlerContext): Promise<FlowState> {
-  const choice = ctx.incoming.buttonReplyId;
-  if (choice === 'mas_si') {
-    await mostrarCartaList(ctx);
-    return { ...ctx.state, step: 'carta' };
-  }
-  if (choice === 'mas_no') {
-    return mostrarResumen(ctx.state, ctx);
-  }
-  // Texto libre o botón desconocido → Gemini interpreta o reenvía
-  return manejarTextoLibre({
-    ctx,
-    stepDescription: `cliente armando carrito, ya tiene ${ctx.state.cart.items.length} producto(s) y debe decidir si agregar más o continuar al pago`,
-    lastBotPrompt: '¿Algo más? Botones: Agregar más / Continuar al pago.',
-    reprompt: async () => {
-      await botSendInteractive({
-        to: ctx.phone,
-        preview: '[reenvío ¿algo más?]',
-        send: () =>
-          sendButtons({
-            to: ctx.phone,
-            body: '¿Algo más?',
-            buttons: [
-              { id: 'mas_si', title: '➕ Agregar más' },
-              { id: 'mas_no', title: '✅ Continuar' },
-            ],
-          }),
-      });
-      return ctx.state;
-    },
-  });
 }
 
 // =========================================================================
@@ -738,11 +805,85 @@ async function mostrarResumen(state: FlowState, ctx: HandlerContext): Promise<Fl
         body,
         buttons: [
           { id: 'pay_yes', title: '✅ Confirmar' },
+          { id: 'pay_edit', title: '✏️ Editar' },
           { id: 'pay_no', title: '❌ Cancelar' },
         ],
       }),
   });
   return { ...state, step: 'resumen' };
+}
+
+/**
+ * Muestra el carrito como List interactiva donde cada fila es un item.
+ * Al seleccionar un item lo quitamos y recalculamos el resumen.
+ * Existe una opción "Listo" para volver al resumen sin cambios.
+ *
+ * Nota: por ahora solo permite QUITAR items, no cambiar cantidades. Si
+ * el cliente quiere cambiar cantidad, lo más rápido es que quite y
+ * vuelva a agregar desde el quick-pick.
+ */
+async function mostrarEditarCarrito(ctx: HandlerContext): Promise<FlowState> {
+  const items = ctx.state.cart.items;
+  if (items.length === 0) {
+    // Edge case: editó hasta vaciar el carrito → volvemos al menú de pedido
+    await botSendText({
+      to: ctx.phone,
+      body: 'El carrito quedó vacío 🛒 Volvamos a la carta para agregar productos.',
+    });
+    await mostrarCartaList(ctx);
+    return { ...ctx.state, step: 'carta' };
+  }
+
+  await botSendInteractive({
+    to: ctx.phone,
+    preview: '[editar carrito]',
+    send: () =>
+      sendList({
+        to: ctx.phone,
+        body: 'Tocá un producto para quitarlo del pedido, o "Listo" cuando termines.',
+        buttonText: 'Ver carrito',
+        sections: [
+          {
+            title: 'En tu carrito',
+            rows: items.map((it, idx) => ({
+              id: `del_${idx}`,
+              title: `${it.qty}× ${it.name}`.slice(0, 24),
+              description: `Tocá para quitar · ${COP(it.price * it.qty)}`,
+            })),
+          },
+          {
+            title: 'Volver',
+            rows: [
+              { id: 'edit_done', title: '✅ Listo', description: 'Volver al resumen' },
+            ],
+          },
+        ],
+      }),
+  });
+  return { ...ctx.state, step: 'resumen_editar' };
+}
+
+export async function handleResumenEditar(ctx: HandlerContext): Promise<FlowState> {
+  const choice = ctx.incoming.listReplyId;
+  if (choice === 'edit_done' || !choice) {
+    return mostrarResumen(ctx.state, ctx);
+  }
+  if (choice.startsWith('del_')) {
+    const idx = parseInt(choice.slice('del_'.length), 10);
+    if (Number.isFinite(idx) && idx >= 0 && idx < ctx.state.cart.items.length) {
+      const newItems = ctx.state.cart.items.filter((_, i) => i !== idx);
+      const removed = ctx.state.cart.items[idx];
+      await botSendText({
+        to: ctx.phone,
+        body: `Listo, quité ${removed.qty}× ${removed.name} del carrito.`,
+      });
+      return mostrarEditarCarrito({
+        ...ctx,
+        state: { ...ctx.state, cart: { ...ctx.state.cart, items: newItems } },
+      });
+    }
+  }
+  return mostrarEditarCarrito(ctx);
 }
 
 export async function handleResumen(ctx: HandlerContext): Promise<FlowState> {
@@ -751,12 +892,15 @@ export async function handleResumen(ctx: HandlerContext): Promise<FlowState> {
     await botSendText({ to: ctx.phone, body: 'Listo parce, lo cancelamos. Cuando quieras pedir de nuevo me escribís 👋' });
     return { ...emptyFlowState(), step: 'finalizado' };
   }
+  if (choice === 'pay_edit') {
+    return mostrarEditarCarrito(ctx);
+  }
   if (choice !== 'pay_yes') {
     // Texto libre o botón desconocido → Gemini interpreta o reenvía el resumen
     return manejarTextoLibre({
       ctx,
       stepDescription: 'cliente revisando el resumen del pedido antes del pago',
-      lastBotPrompt: 'Resumen del pedido + total. Dos botones: Confirmar / Cancelar.',
+      lastBotPrompt: 'Resumen del pedido + total. Tres botones: Confirmar / Editar / Cancelar.',
       reprompt: () => mostrarResumen(ctx.state, ctx),
     });
   }

@@ -17,6 +17,7 @@ import {
   handleCantidadCustom,
   handleAlgoMas,
   handleResumen,
+  handleResumenEditar,
   handlePago,
   handleFinalizado,
   escalarHumano,
@@ -115,6 +116,7 @@ async function dispatch(ctx: HandlerContext): Promise<FlowState> {
     case 'cantidad_custom':      return handleCantidadCustom(ctx);
     case 'algo_mas':             return handleAlgoMas(ctx);
     case 'resumen':              return handleResumen(ctx);
+    case 'resumen_editar':       return handleResumenEditar(ctx);
     case 'pago':                 return handlePago(ctx);
     case 'finalizado':           return handleFinalizado(ctx);
     default:                     return handleEntrada(ctx);

@@ -18,6 +18,7 @@ export type FlowStep =
   | 'cantidad_custom'        // cliente clickeó "3+", esperando número exacto por texto
   | 'algo_mas'               // ¿agregar más o continuar?
   | 'resumen'                // resumen + confirmar
+  | 'resumen_editar'         // editar carrito antes de confirmar (quitar items)
   | 'pago'                   // link Wompi enviado, esperando webhook
   | 'finalizado';            // flujo completo
 
