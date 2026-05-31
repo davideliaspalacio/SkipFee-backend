@@ -45,6 +45,10 @@ function completeOrder() {
 beforeEach(() => {
   process.env.STOREFRONT_ORIGIN = 'http://localhost:5173';
   process.env.NEXT_PUBLIC_APP_ORIGIN = 'http://localhost:3000';
+  // Default a `mock` en cada test salvo que se sobreescriba.
+  process.env.WOMPI_MODE = 'mock';
+  delete process.env.WOMPI_PUBLIC_KEY;
+  delete process.env.WOMPI_INTEGRITY_SECRET;
   customerUpsertCapture.mockReset();
   orderUpdateCapture.mockReset();
 });
@@ -140,5 +144,77 @@ describe('POST /api/checkout/:orderId/pay', () => {
   it('OPTIONS responde 204', async () => {
     const res = await OPTIONS();
     expect(res.status).toBe(204);
+  });
+
+  // ============================================================
+  // WOMPI_MODE=real: devuelve widgetConfig en vez de paymentLink mock
+  // ============================================================
+
+  it('WOMPI_MODE=real ⇒ widgetConfig con signature válida + paymentLink:null', async () => {
+    process.env.WOMPI_MODE = 'real';
+    process.env.WOMPI_PUBLIC_KEY = 'pub_test_xxxxxxxxxxxxxxxxxx';
+    process.env.WOMPI_INTEGRITY_SECRET = 'test_integrity_secret_demo';
+
+    supabaseStub = makeSupabaseStub(tablesFor(completeOrder()));
+    const res = await POST(
+      jsonRequest(URL, 'POST', { customer: { name: 'Ana Pérez', email: 'ana@mail.com' } }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+
+    expect(body.ok).toBe(true);
+    expect(body.total).toBe(60500);
+    expect(body.paymentLink).toBeNull();
+    expect(body.widgetConfig).toBeTruthy();
+    expect(body.widgetConfig.publicKey).toBe('pub_test_xxxxxxxxxxxxxxxxxx');
+    expect(body.widgetConfig.currency).toBe('COP');
+    expect(body.widgetConfig.amountInCents).toBe(6050000); // 60500 * 100
+    expect(body.widgetConfig.reference).toBe('o1');
+    expect(body.widgetConfig.signature).toMatch(/^[0-9a-f]{64}$/);
+    expect(body.widgetConfig.redirectUrl).toBe('http://localhost:5173/pedir/pago/resultado?orderId=o1');
+    expect(body.widgetConfig.customerData?.email).toBe('ana@mail.com');
+    expect(body.widgetConfig.customerData?.fullName).toBe('Ana Pérez');
+  });
+
+  it('WOMPI_MODE=real sin WOMPI_PUBLIC_KEY ⇒ 500 con error claro', async () => {
+    process.env.WOMPI_MODE = 'real';
+    delete process.env.WOMPI_PUBLIC_KEY;
+    process.env.WOMPI_INTEGRITY_SECRET = 'x';
+    supabaseStub = makeSupabaseStub(tablesFor(completeOrder()));
+    const res = await POST(
+      jsonRequest(URL, 'POST', { customer: { name: 'Ana' } }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/WOMPI_PUBLIC_KEY/);
+  });
+
+  it('WOMPI_MODE=real sin WOMPI_INTEGRITY_SECRET ⇒ 500 con error claro', async () => {
+    process.env.WOMPI_MODE = 'real';
+    process.env.WOMPI_PUBLIC_KEY = 'pub_test_xxx';
+    delete process.env.WOMPI_INTEGRITY_SECRET;
+    supabaseStub = makeSupabaseStub(tablesFor(completeOrder()));
+    const res = await POST(
+      jsonRequest(URL, 'POST', { customer: { name: 'Ana' } }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(500);
+    const body = await res.json();
+    expect(body.error).toMatch(/WOMPI_INTEGRITY_SECRET/);
+  });
+
+  it('WOMPI_MODE=mock (default) ⇒ paymentLink + widgetConfig:null', async () => {
+    // Re-verifica el comportamiento legacy explícitamente: el frontend nuevo
+    // puede chequear `widgetConfig` y caer a `paymentLink` si es null.
+    supabaseStub = makeSupabaseStub(tablesFor(completeOrder()));
+    const res = await POST(
+      jsonRequest(URL, 'POST', { customer: { name: 'Ana' } }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    const body = await res.json();
+    expect(body.paymentLink).toBe('http://localhost:3000/wompi/checkout/o1');
+    expect(body.widgetConfig).toBeNull();
   });
 });

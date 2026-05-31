@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
 import { classifyOrder } from '@/lib/checkout/shape';
+import { generateIntegritySignature } from '@/lib/wompi/signature';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,8 +12,15 @@ export const dynamic = 'force-dynamic';
  * POST /api/checkout/:orderId/pay   (público — la web al pulsar "Pagar")
  *
  * Valida que el carrito + dirección guardados estén completos, hace upsert del
- * customer por phone, y devuelve el link de pago para el total actual. NO cambia
- * el estado: la orden sigue `borrador` hasta que el webhook confirme el pago.
+ * customer por phone, y devuelve datos para iniciar el pago. NO cambia el
+ * estado: la orden sigue `borrador` hasta que el webhook confirme el pago.
+ *
+ * Respuesta varía según WOMPI_MODE:
+ *  - `mock` (default): `{ ok, total, paymentLink: <mock URL>, widgetConfig: null }`
+ *    El frontend redirige a esa URL (página local que simula el pago).
+ *  - `real`: `{ ok, total, paymentLink: null, widgetConfig: { publicKey, currency,
+ *    amountInCents, reference, signature, redirectUrl, customerData } }`
+ *    El frontend instancia el Widget oficial (checkout.wompi.co/widget.js).
  *
  * Contrato: CONTRACT_CHECKOUT.md §4.
  *  - 400 { missing: [...] }  si falta algo para pagar (items/address/zoneId/name).
@@ -117,12 +125,52 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
     return jsonWithCors({ ok: false, error: updErr.message }, 500);
   }
 
-  // Mock de Wompi por ahora (igual que /api/orders). Cuando llegue Wompi real,
-  // el paymentLink se genera contra checkout.wompi.co con la `reference`.
+  const total = order.total ?? 0;
+
+  // Dispatch según WOMPI_MODE: mock → paymentLink local, real → widgetConfig
+  // para el Widget oficial. El frontend nuevo chequea widgetConfig primero y
+  // cae a paymentLink si es null (compat).
+  if ((process.env.WOMPI_MODE ?? 'mock') === 'real') {
+    const publicKey = process.env.WOMPI_PUBLIC_KEY;
+    if (!publicKey) {
+      return jsonWithCors(
+        { ok: false, error: 'WOMPI_PUBLIC_KEY no configurado (requerido con WOMPI_MODE=real)' },
+        500,
+      );
+    }
+    let signature: string;
+    try {
+      signature = generateIntegritySignature({
+        reference: orderId,
+        amountInCents: total * 100,
+        currency: 'COP',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'integrity signature error';
+      return jsonWithCors({ ok: false, error: msg }, 500);
+    }
+    const storefrontOrigin = process.env.STOREFRONT_ORIGIN ?? 'http://localhost:5173';
+    const widgetConfig = {
+      publicKey,
+      currency: 'COP' as const,
+      amountInCents: total * 100,
+      reference: orderId,
+      signature,
+      redirectUrl: `${storefrontOrigin}/pedir/pago/resultado?orderId=${orderId}`,
+      customerData: {
+        email: email ?? undefined,
+        fullName: parsed.customer.name,
+        phoneNumber: order.phone,
+        phoneNumberPrefix: '+57',
+      },
+    };
+    return jsonWithCors({ ok: true, total, paymentLink: null, widgetConfig });
+  }
+
+  // Mock: página local que simula el pago.
   const origin = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
   const paymentLink = `${origin}/wompi/checkout/${orderId}`;
-
-  return jsonWithCors({ ok: true, paymentLink, total: order.total ?? 0 });
+  return jsonWithCors({ ok: true, total, paymentLink, widgetConfig: null });
 }
 
 export async function OPTIONS() {
