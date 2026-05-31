@@ -1,8 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
-import { sendText } from '@/lib/kapso/client';
-import { recordMessage } from '@/lib/messaging';
+import { notifyOrderStatus } from '@/lib/orders/notify';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -20,10 +19,10 @@ const bodySchema = z.object({
  * Reglas:
  * - Permite cualquier transición (avance o reverso) entre estados válidos.
  *   El reverso existe para cuando una operaria mueve un pedido por error.
- * - Side effect: en la PRIMERA transición a 'ruta' se envía un WhatsApp
- *   al cliente ("Hola {name}, tu pedido va en camino 🛵"). Si el pedido
- *   se devuelve y vuelve a 'ruta', NO se reenvía (idempotente vía
- *   orders.route_notified_at).
+ * - Side effect: en la PRIMERA transición a un estado notificable
+ *   (pagado/cocina/ruta/entregado) se envía un WhatsApp de seguimiento al
+ *   cliente. Es idempotente vía `orders.notified_statuses` (ver
+ *   `@/lib/orders/notify`): un reverso + re-avance no reenvía.
  * - Si new_status === current_status, responde 200 noop sin tocar BD.
  *
  * Llamado por:
@@ -51,7 +50,7 @@ export async function PATCH(
   // 1. Obtener orden actual con nombre del customer (para el mensaje WhatsApp)
   const { data: order, error: getErr } = await sb
     .from('orders')
-    .select('id, status, phone, route_notified_at, customer:customers(name)')
+    .select('id, status, phone, notified_statuses, customer:customers(name)')
     .eq('id', id)
     .single();
 
@@ -85,50 +84,21 @@ export async function PATCH(
     return Response.json({ ok: false, error: updErr.message }, { status: 500 });
   }
 
-  // 4. Side effect: en la PRIMERA transición a 'ruta', notificar al cliente.
-  //    Si ya se notificó antes (route_notified_at != null), no reenviamos.
-  let notificationSent: { ok: boolean; error?: string } | null = null;
-  if (newStatus === 'ruta' && !order.route_notified_at) {
-    // Postgrest devuelve la relación como objeto o array según multiplicidad — normalizamos.
-    const customerName = Array.isArray(order.customer)
-      ? order.customer[0]?.name
-      : (order.customer as { name?: string } | null)?.name;
-    const firstName = (customerName ?? '').split(' ')[0] || '';
-    const greeting = firstName ? `Hola ${firstName}` : 'Hola';
-    const body = `${greeting}, tu pedido va en camino 🛵`;
-
-    try {
-      const result = await sendText(order.phone, body);
-      const wamid = result.messages?.[0]?.id ?? null;
-      await recordMessage({
-        phone: order.phone,
-        direction: 'out',
-        body,
-        kapsoMessageId: wamid,
-      });
-      // Marcar notificación efectiva para que reverso + re-avance no duplique mensaje.
-      const { error: markErr } = await sb
-        .from('orders')
-        .update({ route_notified_at: new Date().toISOString() })
-        .eq('id', id);
-      if (markErr) {
-        // El mensaje ya salió; loguear pero no fallar.
-        console.error('[orders/status] mark route_notified_at error', markErr);
-      }
-      notificationSent = { ok: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      console.error('[orders/status] notification error', err);
-      notificationSent = { ok: false, error: msg };
-      // No falla el endpoint — el estado ya cambió en BD.
-    }
-  }
+  // 4. Side effect: notificación de seguimiento idempotente (pagado/cocina/
+  //    ruta/entregado). No falla el endpoint si el envío falla: el estado ya
+  //    cambió en BD.
+  const result = await notifyOrderStatus({ sb, order, newStatus });
+  const notification = result.sent
+    ? { ok: true }
+    : result.error
+      ? { ok: false, error: result.error }
+      : null;
 
   return Response.json({
     ok: true,
     orderId: id,
     from: currentStatus,
     to: newStatus,
-    notification: notificationSent,
+    notification,
   });
 }
