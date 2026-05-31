@@ -14,7 +14,17 @@ export const dynamic = 'force-dynamic';
  * - application/json: { orderId, status }
  * - application/x-www-form-urlencoded: orderId=...&status=APPROVED (mock-checkout)
  *
- * Solo transición permitida: nuevo → pagado.
+ * Transiciones permitidas a pagado: `borrador → pagado` (checkout web) y
+ * `nuevo → pagado` (flujo legacy del bot / POST /api/orders). Cualquier otro
+ * estado se ignora (idempotencia: un segundo webhook no re-procesa).
+ *
+ * Revalidación de monto: como el carrito del checkout web es editable hasta
+ * pagar, al aprobar revalidamos que el monto pagado coincida con `orders.total`.
+ * En el MOCK actual el form no envía monto (`amount` ausente) ⇒ se omite la
+ * verificación y se aprueba. Con Wompi REAL, `amount` entra desde
+ * `data.transaction.amount_in_cents` (dividir /100 para COP) y si NO coincide
+ * con el total actual NO se aprueba (el cliente editó tras generar el link).
+ *
  * Side effects al aprobar:
  *  1. orders.status = 'pagado'
  *  2. chats.flow_state.step = 'finalizado' (cierra el flujo)
@@ -24,10 +34,18 @@ export const dynamic = 'force-dynamic';
  * - Verificar X-Event-Checksum con signing secret
  * - Payload tiene shape distinto (event=transaction.updated, data.transaction.status=APPROVED)
  * - Mapear `reference` (que enviamos al crear checkout) al orderId
+ * - Tomar `amount` de `data.transaction.amount_in_cents / 100` y pasarlo acá.
  */
+
+/** Estados desde los que una orden puede pasar a `pagado`. */
+const PAYABLE_STATUSES = ['borrador', 'nuevo'] as const;
+
 const jsonSchema = z.object({
   orderId: z.string().min(1),
   status: z.enum(['APPROVED', 'DECLINED', 'VOIDED', 'ERROR']),
+  // Monto pagado en COP (entero). Opcional: el mock no lo envía. Con Wompi real
+  // llega para revalidar contra orders.total. `coerce` tolera el string del form.
+  amount: z.coerce.number().int().nonnegative().optional(),
 });
 
 async function readPayload(request: NextRequest): Promise<unknown> {
@@ -60,10 +78,10 @@ export async function POST(request: NextRequest) {
 
   const sb = supabaseAdmin();
 
-  // Cargar orden con phone + nombre del cliente
+  // Cargar orden con phone + total + nombre del cliente
   const { data: order, error: getErr } = await sb
     .from('orders')
-    .select('id, status, phone, customer:customers(name)')
+    .select('id, status, phone, total, customer:customers(name)')
     .eq('id', parsed.orderId)
     .single();
 
@@ -71,15 +89,30 @@ export async function POST(request: NextRequest) {
     return responder(request, { ok: false, error: 'Pedido no encontrado' }, 404);
   }
 
-  if (order.status !== 'nuevo') {
-    console.log('[wompi webhook] pedido ya no está en nuevo, ignorando', {
+  if (!(PAYABLE_STATUSES as readonly string[]).includes(order.status)) {
+    console.log('[wompi webhook] pedido no está en un estado pagable, ignorando', {
       orderId: order.id,
       currentStatus: order.status,
     });
     return responder(request, {
       ok: true,
       applied: false,
-      reason: `status=${order.status}, esperaba nuevo`,
+      reason: `status=${order.status}, esperaba ${PAYABLE_STATUSES.join(' o ')}`,
+    });
+  }
+
+  // Revalidar monto (carrito editable hasta pagar). El mock no manda `amount` ⇒
+  // se omite. Con Wompi real, si no coincide con el total actual NO aprobamos.
+  if (parsed.amount != null && parsed.amount !== (order.total ?? 0)) {
+    console.warn('[wompi webhook] monto no coincide con total actual, no aprobando', {
+      orderId: order.id,
+      amount: parsed.amount,
+      total: order.total,
+    });
+    return responder(request, {
+      ok: true,
+      applied: false,
+      reason: `monto recibido (${parsed.amount}) != total actual (${order.total})`,
     });
   }
 
@@ -112,17 +145,13 @@ export async function POST(request: NextRequest) {
       kapsoMessageId: wamid,
     });
 
-    // Cerrar el flujo (flow_state.step = 'finalizado')
+    // Cerrar el flujo (flow_state.step = 'finalizado'). En el bot mínimo el
+    // flow_state ya no guarda cart/customer (eso vive en la tienda web).
     const chatId = `wa:${order.phone}`;
     await sb
       .from('chats')
       .update({
-        flow_state: {
-          step: 'finalizado',
-          cart: { items: [] },
-          customer: {},
-          orderId: order.id,
-        },
+        flow_state: { step: 'finalizado', orderId: order.id },
         flow_updated_at: new Date().toISOString(),
       })
       .eq('id', chatId);
