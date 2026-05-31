@@ -1,39 +1,23 @@
 import type { FlowState } from './state';
 import type { IncomingMessage } from './parser';
 import { loadFlowState, saveFlowState } from './persistence';
+import { detectPedirIntent } from './intent';
 import {
   handleEntrada,
-  handleConsentimiento,
-  handleMenuPrincipal,
-  handleMenuRecurrente,
-  handleRegistroNombre,
-  handleRegistroEmail,
-  handleRegistroConfirmar,
-  handleUbicacion,
-  handleDireccionTexto,
-  handleDireccionConfirmar,
-  handleCarta,
-  handleCantidad,
-  handleCantidadCustom,
-  handleAlgoMas,
-  handleResumen,
-  handleResumenEditar,
-  handlePago,
-  handleFinalizado,
+  handleMenu,
+  handleLinkEnviado,
+  enviarLinkPedido,
   escalarHumano,
   cancelarFlujo,
   type HandlerContext,
 } from './handlers';
 
 /**
- * Palabras clave que el cliente puede escribir en CUALQUIER step del flujo
- * para escapar del happy path. Se evalúan antes del dispatch del handler
- * del step actual.
+ * Palabras clave que el cliente puede escribir en CUALQUIER step para escapar
+ * del happy path. Se evalúan antes del dispatch del handler del step actual.
  *
  * - cancelar: limpia el flow_state y se despide; el chat sigue en modo bot
- * - humano:   transfiere el chat a status='human'; el bot deja de responder
- * - ayuda:    también transfiere a humano (más simple que armar un menú
- *             contextual; lo podemos refinar después con un agente Gemini)
+ * - humano/ayuda: transfiere el chat a status='human'; el bot deja de responder
  */
 const GLOBAL_KEYWORDS: Record<'cancelar' | 'humano' | 'ayuda', string[]> = {
   cancelar: ['cancelar', 'cancel', 'salir', 'parar', 'stop', 'olvidalo', 'olvídalo'],
@@ -55,15 +39,14 @@ function detectGlobalIntent(text: string | undefined): keyof typeof GLOBAL_KEYWO
 }
 
 /**
- * Orchestrator del state machine del bot.
- *
- * Cuando llega un mensaje al webhook, este es el punto de entrada
- * (si `chat.status === 'bot'`):
+ * Orchestrator del state machine del bot mínimo.
  *
  *   1. Cargar flow_state del chat (o vacío si nunca interactuó)
- *   2. Si nunca interactuó → handleEntrada (saludo + consentimiento)
- *   3. Si ya tiene step → despachar al handler correspondiente
- *   4. Guardar nuevo flow_state
+ *   2. Layer global: cancelar / humano / ayuda
+ *   3. Intención de pedir (texto, incl. "Quiero hacer un pedido" del botón de
+ *      carrito vencido) en cualquier step → manda un link nuevo
+ *   4. Dispatch por step
+ *   5. Guardar nuevo flow_state
  */
 export async function processFlowMessage(opts: {
   chatId: string;
@@ -80,45 +63,34 @@ export async function processFlowMessage(opts: {
     incoming: opts.message,
   };
 
-  // Primera vez: no hemos pedido consentimiento aún
-  const isFirstContact = !state.consentAskedAt && !state.consentGiven;
-  let next: FlowState;
-  if (isFirstContact) {
-    next = await handleEntrada(ctx);
-  } else {
-    next = await dispatch(ctx);
-  }
-
+  const next = await routeFlow(ctx);
   await saveFlowState(opts.chatId, next);
 }
 
-async function dispatch(ctx: HandlerContext): Promise<FlowState> {
-  // Layer global de keywords: aplica en cualquier step antes del handler.
-  // Solo cuando el cliente escribe texto (no en button/list replies).
-  const intent = ctx.incoming.text ? detectGlobalIntent(ctx.incoming.text) : null;
+/**
+ * Decide qué handler corre para este mensaje. Separado de la persistencia para
+ * poder testearlo. (Los handlers hacen su propio I/O — acá solo enrutamos.)
+ */
+export async function routeFlow(ctx: HandlerContext): Promise<FlowState> {
+  const text = ctx.incoming.text;
+
+  // 1. Keywords globales (solo sobre texto, no en button replies)
+  const intent = text ? detectGlobalIntent(text) : null;
   if (intent === 'cancelar') return cancelarFlujo(ctx);
   if (intent === 'humano' || intent === 'ayuda') {
     return escalarHumano(ctx, `keyword: ${intent}`);
   }
 
+  // 2. Intención de pedir desde cualquier step → link nuevo (sin fricción).
+  //    Cubre el texto exacto del botón de "carrito vencido" de la tienda.
+  if (detectPedirIntent(text)) return enviarLinkPedido(ctx);
+
+  // 3. Dispatch por step
   switch (ctx.state.step) {
-    case 'consentimiento':       return handleConsentimiento(ctx);
-    case 'menu_principal':       return handleMenuPrincipal(ctx);
-    case 'menu_recurrente':      return handleMenuRecurrente(ctx);
-    case 'registro_nombre':      return handleRegistroNombre(ctx);
-    case 'registro_email':       return handleRegistroEmail(ctx);
-    case 'registro_confirmar':   return handleRegistroConfirmar(ctx);
-    case 'ubicacion':            return handleUbicacion(ctx);
-    case 'direccion_texto':      return handleDireccionTexto(ctx);
-    case 'direccion_confirmar':  return handleDireccionConfirmar(ctx);
-    case 'carta':                return handleCarta(ctx);
-    case 'cantidad':             return handleCantidad(ctx);
-    case 'cantidad_custom':      return handleCantidadCustom(ctx);
-    case 'algo_mas':             return handleAlgoMas(ctx);
-    case 'resumen':              return handleResumen(ctx);
-    case 'resumen_editar':       return handleResumenEditar(ctx);
-    case 'pago':                 return handlePago(ctx);
-    case 'finalizado':           return handleFinalizado(ctx);
-    default:                     return handleEntrada(ctx);
+    case 'menu':          return handleMenu(ctx);
+    case 'link_enviado':  return handleLinkEnviado(ctx);
+    case 'inicio':        return handleEntrada(ctx);
+    case 'finalizado':    return handleEntrada(ctx); // re-saluda y reinicia
+    default:              return handleEntrada(ctx);
   }
 }
