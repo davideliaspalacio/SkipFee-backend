@@ -18,6 +18,24 @@ const schema = z.object({
   GEMINI_API_KEY: z.string().min(1),
   GEMINI_MODEL: z.string().default('gemini-2.5-flash'),
 
+  // --- Wompi (Widget Checkout Web) ---
+  // En `mock` (default) el flujo sigue con la página /wompi/checkout/[orderId].
+  // En `real` el POST /pay devuelve un widgetConfig que el frontend pasa al
+  // Widget oficial (https://checkout.wompi.co/widget.js).
+  // Las WOMPI_* son opcionales en el schema (para no romper el dev de quien aún
+  // no las configuró). Se validan SÓLO en los handlers que las usan cuando MODE=real.
+  WOMPI_MODE: z.enum(['mock', 'real']).default('mock'),
+  WOMPI_API_BASE: z.string().url().default('https://sandbox.wompi.co/v1'),
+  // Public key: se expone al frontend (también vía VITE_WOMPI_PUBLIC_KEY).
+  WOMPI_PUBLIC_KEY: z.string().optional(),
+  // Integrity secret: para firmar el widgetConfig (sha256 reference+amount+currency+secret).
+  WOMPI_INTEGRITY_SECRET: z.string().optional(),
+  // Events secret: para verificar la firma de los webhooks de Wompi.
+  WOMPI_EVENTS_SECRET: z.string().optional(),
+  // Private key: hoy no la usamos (el Widget cubre todo). Queda opcional por si en
+  // el futuro necesitamos consultar transactions / refunds desde el backend.
+  WOMPI_PRIVATE_KEY: z.string().optional(),
+
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });
 
