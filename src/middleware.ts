@@ -1,64 +1,33 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { getSessionUser } from '@/lib/auth';
+import { isAllowedOrigin, isPublicPath, isStorefrontSelfCors } from '@/lib/checkout/access';
 
 /**
  * Middleware que (a) habilita CORS para el frontend en otro origen y
  * (b) protege todas las rutas /api/* salvo las explícitamente públicas.
  *
  * CORS:
- * - El frontend Vite vive en :5173 y hace fetch al backend en :3000.
- * - Para que las cookies HTTP-only viajen cross-origin, respondemos
+ * - El panel admin (Vite :5173) hace fetch al backend (:3000). Para que las
+ *   cookies HTTP-only viajen cross-origin respondemos
  *   Access-Control-Allow-Credentials: true y devolvemos el Origin tal cual
  *   (nunca '*' porque no es compatible con credentials).
  * - Manejamos el preflight OPTIONS automáticamente.
+ * - Los orígenes permitidos salen de `allowedOrigins()` (dev + STOREFRONT_ORIGIN).
  *
- * Rutas públicas:
- * - /api/health                  — healthcheck
- * - /api/auth/*                  — login, logout, me
- * - /api/webhooks/*              — Kapso valida con HMAC
- * - /api/wompi/webhook           — Wompi valida con checksum
- * - /api/products/available      — la consume el bot
+ * Tienda web (`/pedir`):
+ * - Las rutas `/api/checkout/*` setean su PROPIO CORS (origen = STOREFRONT_ORIGIN,
+ *   sin credentials) y manejan su preflight OPTIONS. El middleware las deja pasar
+ *   intactas (sin sesión, sin pisar headers) vía `isStorefrontSelfCors`.
+ * - `GET /api/zones` y `/api/products/available` son públicas y reciben CORS del
+ *   middleware (ver `@/lib/checkout/access`).
  */
-
-const ALLOWED_ORIGINS = [
-  'http://localhost:5173',
-  'http://127.0.0.1:5173',
-  // Agregar dominios de producción acá cuando despleguemos.
-];
-
-const PUBLIC_PREFIXES = [
-  '/api/health',
-  '/api/auth/',
-  '/api/webhooks/',
-  '/api/wompi/webhook',
-  '/api/products/available',
-  '/api/cron/',
-];
-
-/**
- * Endpoints públicos por método. El bot de WhatsApp llama estos desde el
- * propio backend (en handlers de Kapso) y no tiene sesión de admin.
- *
- * El rate limit por número de teléfono vive dentro de cada handler.
- */
-const PUBLIC_METHOD_PATHS: Array<{ method: string; pathname: string }> = [
-  { method: 'POST', pathname: '/api/orders' },   // bot crea pedido para el cliente
-  { method: 'POST', pathname: '/api/quotes' },   // bot cotiza
-];
-
-function isPublic(pathname: string, method: string): boolean {
-  if (PUBLIC_PREFIXES.some(p => pathname === p || pathname.startsWith(p))) return true;
-  return PUBLIC_METHOD_PATHS.some(
-    r => r.method === method && r.pathname === pathname,
-  );
-}
 
 function corsHeaders(origin: string | null): Record<string, string> {
-  if (!origin || !ALLOWED_ORIGINS.includes(origin)) return {};
+  if (!isAllowedOrigin(origin) || !origin) return {};
   return {
     'Access-Control-Allow-Origin': origin,
     'Access-Control-Allow-Credentials': 'true',
-    'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     'Access-Control-Max-Age': '86400',
     Vary: 'Origin',
@@ -68,6 +37,13 @@ function corsHeaders(origin: string | null): Record<string, string> {
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
   const origin = request.headers.get('origin');
+
+  // /api/checkout/*: las rutas gestionan su propio CORS + preflight OPTIONS y son
+  // públicas (el secreto es el orderId). Pasar sin tocar headers ni sesión.
+  if (isStorefrontSelfCors(pathname)) {
+    return NextResponse.next();
+  }
+
   const cors = corsHeaders(origin);
 
   // Preflight CORS
@@ -76,7 +52,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Rutas públicas: pasar sin chequeo de sesión
-  if (isPublic(pathname, request.method)) {
+  if (isPublicPath(pathname, request.method)) {
     const res = NextResponse.next();
     for (const [k, v] of Object.entries(cors)) res.headers.set(k, v);
     return res;
