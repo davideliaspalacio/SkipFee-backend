@@ -83,7 +83,7 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
         body: `${saludo}\n¿Hacemos un pedido?`,
         buttons: [
           { id: 'menu_pedir', title: '🥪 Hacer pedido' },
-          { id: 'menu_humano', title: '🙋 Hablar con alguien' },
+          { id: 'menu_humano', title: '🙋 Hablar humano' },
         ],
       }),
   });
@@ -105,7 +105,7 @@ export async function handleMenu(ctx: HandlerContext): Promise<FlowState> {
   return manejarTextoLibre({
     ctx,
     stepDescription: 'menú inicial del bot: el cliente decide si hacer un pedido o hablar con un humano',
-    lastBotPrompt: '¿Hacemos un pedido? (botones: Hacer pedido / Hablar con alguien)',
+    lastBotPrompt: '¿Hacemos un pedido? (botones: Hacer pedido / Hablar humano)',
     reprompt: () => reenviarMenu(ctx),
   });
 }
@@ -271,7 +271,7 @@ async function reenviarMenu(ctx: HandlerContext): Promise<FlowState> {
         body: '¿Hacemos un pedido?',
         buttons: [
           { id: 'menu_pedir', title: '🥪 Hacer pedido' },
-          { id: 'menu_humano', title: '🙋 Hablar con alguien' },
+          { id: 'menu_humano', title: '🙋 Hablar humano' },
         ],
       }),
   });
