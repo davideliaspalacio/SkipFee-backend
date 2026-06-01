@@ -134,4 +134,37 @@ describe('GET /api/checkout/:orderId', () => {
     const res = await OPTIONS();
     expect(res.status).toBe(204);
   });
+
+  it('devuelve wompiStatusMessage cuando la orden tiene un rechazo previo', async () => {
+    // Caso real: cliente pagó, Wompi DECLINED, webhook volvió la orden a borrador
+    // con el motivo guardado. La tienda usa esto para mostrarle "tu pago fue
+    // rechazado: <msg>" y ofrecer reintentar.
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    const order = {
+      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
+      wompi_status_message: 'Fondos insuficientes',
+      customer: { name: 'Ana', email: null },
+      items: [],
+    };
+    supabaseStub = makeSupabaseStub(baseTables(order));
+    const res = await GET(getRequest(url('o1')), asyncParams({ orderId: 'o1' }));
+    const body = await res.json();
+    expect(body.status).toBe('valida');
+    expect(body.order.wompiStatusMessage).toBe('Fondos insuficientes');
+  });
+
+  it('wompiStatusMessage es null cuando la orden nunca tuvo intento de pago', async () => {
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    const order = {
+      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      address: null, zone_id: null, lat: null, lng: null, note: null,
+      wompi_status_message: null,
+      customer: null, items: [],
+    };
+    supabaseStub = makeSupabaseStub(baseTables(order));
+    const res = await GET(getRequest(url('o1')), asyncParams({ orderId: 'o1' }));
+    const body = await res.json();
+    expect(body.order.wompiStatusMessage).toBeNull();
+  });
 });

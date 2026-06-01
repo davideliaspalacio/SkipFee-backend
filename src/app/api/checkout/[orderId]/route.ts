@@ -36,6 +36,7 @@ type OrderRow = {
   lat: number | null;
   lng: number | null;
   note: string | null;
+  wompi_status_message: string | null;
   customer: { name: string; email: string | null } | { name: string; email: string | null }[] | null;
   items: OrderItemRow[] | null;
 };
@@ -52,7 +53,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   const { data: order } = (await sb
     .from('orders')
     .select(
-      `id, phone, status, expires_at, address, zone_id, lat, lng, note,
+      `id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message,
        customer:customers(name, email),
        items:order_items(qty, price_at_order, product:products(id, name))`,
     )
@@ -119,6 +120,10 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
       cart,
       delivery,
       customer: customer ? { name: customer.name, email: customer.email ?? null } : null,
+      // Si el cliente intentó pagar y le rechazaron (webhook DECLINED/ERROR
+      // volvió la orden a `borrador`), el frontend usa esto para mostrarle
+      // el motivo y ofrecerle reintentar con otra tarjeta/método.
+      wompiStatusMessage: order.wompi_status_message ?? null,
     },
     catalog: buildCatalog(productList.map(p => ({ id: p.id, name: p.name, price: p.price, cat: p.cat }))),
     zones: zoneList.map(z => ({ id: z.id, name: z.name ?? '', tarifa: z.tarifa, recargo: z.recargo })),
