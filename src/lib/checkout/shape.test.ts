@@ -4,22 +4,22 @@ import { buildCatalog, emptyCart, classifyOrder } from './shape';
 describe('buildCatalog', () => {
   it('agrupa productos por categoría en la forma del contrato', () => {
     const catalog = buildCatalog([
-      { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches' },
-      { id: 'p02', name: 'Italian Bro', price: 30000, cat: 'Sándwiches' },
-      { id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas' },
+      { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches', img: 'https://cdn/p01.jpg' },
+      { id: 'p02', name: 'Italian Bro', price: 30000, cat: 'Sándwiches', img: null },
+      { id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas', img: null },
     ]);
     expect(catalog).toEqual({
       categories: [
         {
           cat: 'Sándwiches',
           items: [
-            { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches' },
-            { id: 'p02', name: 'Italian Bro', price: 30000, cat: 'Sándwiches' },
+            { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches', img: 'https://cdn/p01.jpg' },
+            { id: 'p02', name: 'Italian Bro', price: 30000, cat: 'Sándwiches', img: null },
           ],
         },
         {
           cat: 'Bebidas',
-          items: [{ id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas' }],
+          items: [{ id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas', img: null }],
         },
       ],
     });

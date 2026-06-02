@@ -8,24 +8,28 @@ export interface CatalogProduct {
   name: string;
   price: number;
   cat: string;
+  /** URL pública de la imagen (Storage o externa). `null` si no hay foto cargada. */
+  img: string | null;
 }
 
 export interface Catalog {
   categories: Array<{
     cat: string;
-    items: Array<{ id: string; name: string; price: number; cat: string }>;
+    items: Array<{ id: string; name: string; price: number; cat: string; img: string | null }>;
   }>;
 }
 
 /**
  * Catálogo embebido del GET: agrupa por categoría preservando el orden de
- * aparición. Cada item es la forma reducida `{ id, name, price, cat }`.
+ * aparición. Cada item es la forma reducida `{ id, name, price, cat, img }`
+ * — incluye `img` para que el storefront muestre la foto del producto en
+ * lugar del placeholder de categoría.
  */
 export function buildCatalog(products: CatalogProduct[]): Catalog {
   const byCat = new Map<string, Catalog['categories'][number]['items']>();
   for (const p of products) {
     const list = byCat.get(p.cat) ?? [];
-    list.push({ id: p.id, name: p.name, price: p.price, cat: p.cat });
+    list.push({ id: p.id, name: p.name, price: p.price, cat: p.cat, img: p.img });
     byCat.set(p.cat, list);
   }
   return {
