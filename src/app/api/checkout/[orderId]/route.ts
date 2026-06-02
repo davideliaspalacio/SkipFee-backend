@@ -13,8 +13,10 @@ export const dynamic = 'force-dynamic';
  * Siempre responde 200 con un `status` discriminado (CONTRACT_CHECKOUT.md §2):
  *  - valida        ⇒ devuelve order (cart actual + delivery/customer prefill),
  *                    catalog embebido y zones.
- *  - expirada / no_encontrada / ya_usada ⇒ solo { ok, status } (la web muestra
- *                    la pantalla de "carrito vencido").
+ *  - ya_usada      ⇒ devuelve { ok, status, order: { orderStatus, orderNumber } }
+ *                    para que la pantalla post-pago muestre el progress real
+ *                    (pagado → cocina → ruta → entregado).
+ *  - expirada / no_encontrada ⇒ solo { ok, status }.
  *
  * El `cart` se recalcula con `computeOrderTotals` sobre los items guardados y el
  * catálogo/zona/settings actuales, para que GET y PUT siempre coincidan.
@@ -37,6 +39,7 @@ type OrderRow = {
   lng: number | null;
   note: string | null;
   wompi_status_message: string | null;
+  order_number: number | null;
   customer: { name: string; email: string | null } | { name: string; email: string | null }[] | null;
   items: OrderItemRow[] | null;
 };
@@ -53,7 +56,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   const { data: order } = (await sb
     .from('orders')
     .select(
-      `id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message,
+      `id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message, order_number,
        customer:customers(name, email),
        items:order_items(qty, price_at_order, product:products(id, name))`,
     )
@@ -62,6 +65,20 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
 
   const status = classifyOrder(order, new Date());
   if (status !== 'valida' || !order) {
+    // `ya_usada` cubre orden ya en pipeline (pagado/cocina/ruta/entregado/etc).
+    // Devolvemos el status real y el order_number para que la pantalla
+    // post-pago pueda mostrar el progress y un identificador legible.
+    if (status === 'ya_usada' && order) {
+      return jsonWithCors({
+        ok: true,
+        status,
+        order: {
+          orderId: order.id,
+          orderStatus: order.status,
+          orderNumber: order.order_number ?? null,
+        },
+      });
+    }
     return jsonWithCors({ ok: true, status });
   }
 

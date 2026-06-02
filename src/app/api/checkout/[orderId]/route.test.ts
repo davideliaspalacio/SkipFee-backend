@@ -117,11 +117,28 @@ describe('GET /api/checkout/:orderId', () => {
     expect(await res.json()).toEqual({ ok: true, status: 'no_encontrada' });
   });
 
-  it('orden ya pagada/en kanban ⇒ 200 status ya_usada', async () => {
+  it('orden ya pagada/en kanban ⇒ 200 status ya_usada + order{orderStatus, orderNumber}', async () => {
+    const order = {
+      id: 'o1', phone: 'x', status: 'cocina', expires_at: null,
+      order_number: 1234, items: [],
+    };
+    supabaseStub = makeSupabaseStub(baseTables(order));
+    const res = await GET(getRequest(url('o1')), asyncParams({ orderId: 'o1' }));
+    expect(await res.json()).toEqual({
+      ok: true,
+      status: 'ya_usada',
+      order: { orderId: 'o1', orderStatus: 'cocina', orderNumber: 1234 },
+    });
+  });
+
+  it('ya_usada sin order_number ⇒ orderNumber: null', async () => {
     const order = { id: 'o1', phone: 'x', status: 'pagado', expires_at: null, items: [] };
     supabaseStub = makeSupabaseStub(baseTables(order));
     const res = await GET(getRequest(url('o1')), asyncParams({ orderId: 'o1' }));
-    expect(await res.json()).toEqual({ ok: true, status: 'ya_usada' });
+    const body = await res.json();
+    expect(body.status).toBe('ya_usada');
+    expect(body.order.orderStatus).toBe('pagado');
+    expect(body.order.orderNumber).toBeNull();
   });
 
   it('respuesta lleva headers CORS', async () => {
