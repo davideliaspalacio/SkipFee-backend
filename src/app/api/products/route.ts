@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic';
 export async function GET() {
   const { data, error } = await supabaseAdmin()
     .from('products')
-    .select('id, name, price, cat, sold, available, img')
+    .select('id, name, price, cat, sold, available, img, description')
     .order('cat')
     .order('name');
 
@@ -34,6 +34,8 @@ const createSchema = z.object({
   /** URL externa o de Storage. Si el cliente recién creó el producto y va a
    *  subir imagen vía POST /:id/image, este campo puede venir vacío. */
   img: z.string().max(1000).optional().default(''),
+  /** Descripción opcional. Se muestra en el card del admin y del cliente. */
+  description: z.string().max(500).nullish(),
 });
 
 /**
@@ -61,9 +63,12 @@ export async function POST(request: NextRequest) {
       cat: parsed.cat,
       available: parsed.available,
       img: parsed.img,
+      // Normalizamos string vacío a null para que la columna refleje
+      // "sin descripción" en lugar de un string vacío visualmente engañoso.
+      description: parsed.description?.trim() ? parsed.description : null,
       sold: 0,
     })
-    .select('id, name, price, cat, sold, available, img')
+    .select('id, name, price, cat, sold, available, img, description')
     .single();
 
   if (error || !data) {

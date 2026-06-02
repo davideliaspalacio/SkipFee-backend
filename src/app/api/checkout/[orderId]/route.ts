@@ -84,14 +84,17 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
 
   // Catálogo + zonas + settings (para recalcular el carrito y embeber catálogo).
   const [{ data: products }, { data: zones }, { data: settings }] = await Promise.all([
-    sb.from('products').select('id, name, price, cat, available, img').eq('available', true).order('cat').order('name'),
+    sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').order('name'),
     sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
   ]);
 
-  // `img` lo agregamos al SELECT para embeber la foto en el catálogo
-  // — `TotalsProduct` viene de pricing y no lo conoce, lo extendemos aquí.
-  const productList = (products ?? []) as Array<TotalsProduct & { cat: string; img: string | null }>;
+  // `img` y `description` los agregamos al SELECT para embeberlos en el
+  // catálogo — `TotalsProduct` viene de pricing y solo conoce los campos
+  // que tocan el cálculo, los extendemos aquí.
+  const productList = (products ?? []) as Array<
+    TotalsProduct & { cat: string; img: string | null; description: string | null }
+  >;
   const zoneList = (zones ?? []) as Array<TotalsZone & { color?: string }>;
   const zone = order.zone_id ? zoneList.find(z => z.id === order.zone_id) ?? null : null;
 
@@ -154,6 +157,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
         // foto. Lo normalizamos a null para que el storefront caiga al
         // placeholder de categoría sin renderizar un <img src=""> roto.
         img: p.img && p.img.trim() ? p.img : null,
+        description: p.description && p.description.trim() ? p.description : null,
       })),
     ),
     zones: zoneList.map(z => ({ id: z.id, name: z.name ?? '', tarifa: z.tarifa, recargo: z.recargo })),

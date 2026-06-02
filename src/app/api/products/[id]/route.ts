@@ -12,6 +12,8 @@ const patchSchema = z.object({
   cat: z.string().min(1).max(60).optional(),
   img: z.string().max(1000).optional(),
   sold: z.number().int().nonnegative().optional(),
+  // `nullable` para permitir limpiar la descripción explícitamente.
+  description: z.string().max(500).nullable().optional(),
 });
 
 const STORAGE_BUCKET = 'product-images';
@@ -58,11 +60,18 @@ export async function PATCH(
     return Response.json({ ok: false, error: 'Sin campos para actualizar' }, { status: 400 });
   }
 
+  // Normalizamos string vacío a null (igual que en POST) — el operario que
+  // vacía el textarea espera "sin descripción", no un string vacío.
+  const patch =
+    typeof parsed.description === 'string' && !parsed.description.trim()
+      ? { ...parsed, description: null }
+      : parsed;
+
   const { data, error } = await supabaseAdmin()
     .from('products')
-    .update(parsed)
+    .update(patch)
     .eq('id', id)
-    .select('id, name, price, cat, sold, available, img')
+    .select('id, name, price, cat, sold, available, img, description')
     .single();
 
   if (error || !data) {

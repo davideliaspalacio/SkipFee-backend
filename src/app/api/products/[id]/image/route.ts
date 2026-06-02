@@ -97,7 +97,7 @@ export async function POST(
     .from('products')
     .update({ img: publicUrl })
     .eq('id', id)
-    .select('id, name, price, cat, sold, available, img')
+    .select('id, name, price, cat, sold, available, img, description')
     .single();
 
   if (updErr || !updated) {

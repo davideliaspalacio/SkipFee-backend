@@ -10,8 +10,8 @@ vi.mock('@/lib/db', () => ({
 import { GET, OPTIONS } from './route';
 
 const PRODUCTS = [
-  { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches', available: true, img: 'https://cdn/p01.jpg' },
-  { id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas', available: true, img: '' },
+  { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches', available: true, img: 'https://cdn/p01.jpg', description: 'Pastrami curado 7 días, mostaza dijon' },
+  { id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas', available: true, img: '', description: null },
 ];
 const ZONES = [
   { id: 'poblado', name: 'El Poblado', tarifa: 4500, recargo: 1500, color: '#f00', lat: 6.2, lng: -75.5 },
@@ -83,10 +83,14 @@ describe('GET /api/checkout/:orderId', () => {
       price: 28000,
       cat: 'Sándwiches',
       img: 'https://cdn/p01.jpg',
+      description: 'Pastrami curado 7 días, mostaza dijon',
     });
     // Producto sin imagen (img:'' en BD) ⇒ catalog devuelve null para que el
     // storefront renderice el placeholder en vez de un <img src=""> roto.
     expect(body.catalog.categories[1].items[0].img).toBe(null);
+    // Producto sin descripción (description:null en BD) ⇒ se mantiene null,
+    // el storefront simplemente no renderiza el <p>.
+    expect(body.catalog.categories[1].items[0].description).toBe(null);
     // Zonas
     expect(body.zones).toEqual([{ id: 'poblado', name: 'El Poblado', tarifa: 4500, recargo: 1500 }]);
 
