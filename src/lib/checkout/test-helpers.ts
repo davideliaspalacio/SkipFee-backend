@@ -90,6 +90,11 @@ export function makeSupabaseStub(config: SupabaseStubConfig) {
       mode = 'update';
       writePayload = payload;
       calls.push({ table, op: 'update', payload, filters });
+      // Capturamos inmediatamente para soportar el patrón con RETURNING:
+      //   `.update(payload).eq(...).select(...).single()`
+      // Sin esto el handler `onUpdate` solo se invocaba en el terminator
+      // `.then` (await directo sin .select()/.single()).
+      writeResult = cfg.onUpdate?.(payload, filters);
       return chain();
     };
     builder.upsert = (payload: unknown) => {
@@ -106,11 +111,11 @@ export function makeSupabaseStub(config: SupabaseStubConfig) {
     };
 
     builder.single = () => {
-      if (mode === 'insert') {
-        const r = writeResult ?? {};
-        return Promise.resolve({ data: r.data ?? cfg.single ?? null, error: r.error ?? cfg.error ?? null });
-      }
-      if (mode === 'upsert') {
+      if (mode === 'insert' || mode === 'upsert' || mode === 'update') {
+        // Patrones con RETURNING: `.{insert|upsert|update}(...).select(...).single()`.
+        // Si `onInsert/Upsert/Update` devolvió `{data}`, eso se devuelve. Si
+        // devolvió void/null, caemos a `cfg.single` como fallback (útil para
+        // tests que no quieren custom-shape la respuesta).
         const r = writeResult ?? {};
         return Promise.resolve({ data: r.data ?? cfg.single ?? null, error: r.error ?? cfg.error ?? null });
       }
@@ -136,7 +141,9 @@ export function makeSupabaseStub(config: SupabaseStubConfig) {
     builder.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) => {
       let result: { data: unknown; error: { message: string } | null };
       if (mode === 'update') {
-        const r = cfg.onUpdate?.(writePayload, filters) ?? {};
+        // `onUpdate` ya fue llamado en `update()` y guardado en `writeResult`.
+        // No re-llamamos para evitar capturas duplicadas en tests.
+        const r = writeResult ?? {};
         result = { data: (r.data ?? null) as unknown, error: r.error ?? cfg.error ?? null };
       } else if (mode === 'delete') {
         const r = cfg.onDelete?.(filters) ?? {};
