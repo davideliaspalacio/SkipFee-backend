@@ -6,26 +6,21 @@
  * intención desde texto libre en CUALQUIER step, incluido el texto exacto que
  * pre-rellena el botón de "carrito vencido" de la tienda (`"Quiero hacer un
  * pedido"`, ver CONTRACT/PLAN §6.1), para regenerar un link sin fricción.
+ *
+ * Las palabras gatillo son EDITABLES desde la UI (`keywords.pedir`). El default
+ * param mantiene la función pura/sincrónica; `routeFlow` le pasa las del
+ * catálogo.
  */
 
-const PEDIR_KEYWORDS = [
-  'quiero hacer un pedido', // texto exacto del botón "carrito vencido"
-  'hacer un pedido',
-  'hacer pedido',
-  'quiero pedir',
-  'pedir',
-  'pedido',
-  'ordenar',
-  'ver carta',
-  'carta',
-  'menu',
-  'menú',
-];
+import { PEDIR_KEYWORDS } from '@/lib/bot/messages/defaults';
 
-export function detectPedirIntent(text: string | undefined): boolean {
+export function detectPedirIntent(
+  text: string | undefined,
+  keywords: readonly string[] = PEDIR_KEYWORDS,
+): boolean {
   if (!text) return false;
   const norm = text.toLowerCase().trim();
   // Ignoramos mensajes vacíos o demasiado largos (probablemente no son una orden).
   if (norm.length === 0 || norm.length > 80) return false;
-  return PEDIR_KEYWORDS.some(k => norm === k || norm.includes(k));
+  return keywords.some(k => norm === k || norm.includes(k));
 }

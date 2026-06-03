@@ -2,6 +2,9 @@ import { supabaseAdmin } from '@/lib/db';
 import { sendText } from '@/lib/kapso/client';
 import { sendButtons, sendCtaUrl, sendList } from '@/lib/kapso/interactive';
 import { recordMessage } from '@/lib/messaging';
+import { getMessage } from '@/lib/bot/messages/catalog';
+import { render, type RenderVars } from '@/lib/bot/messages/render';
+import type { ButtonDef } from '@/lib/bot/messages/defaults';
 import type { FlowState, FlowCustomer, FlowDelivery } from './state';
 import { emptyFlowState } from './state';
 import type { IncomingMessage } from './parser';
@@ -9,6 +12,10 @@ import { assistOffScript } from './gemini-fallback';
 
 /**
  * Handlers del bot.
+ *
+ * Los TEXTOS de los mensajes ya no viven acá: se resuelven por `key` desde el
+ * catálogo editable (`@/lib/bot/messages`). Con la tabla `bot_messages` vacía,
+ * el catálogo cae a los defaults del código y el bot dice exactamente lo mismo.
  *
  * Flujo: el bot captura nombre + email + dirección + zona por WhatsApp y solo
  * después manda el link de la tienda web. En la tienda el cliente solo elige
@@ -61,6 +68,36 @@ async function botSendInteractive<T extends { messages?: Array<{ id?: string }> 
   });
 }
 
+/** Resuelve un mensaje de texto del catálogo, lo interpola y lo envía. */
+async function sendCatalogText(to: string, key: string, vars: RenderVars = {}) {
+  const m = await getMessage(key);
+  await botSendText({ to, body: render(m.body, vars) });
+}
+
+function renderButtons(buttons: ButtonDef[] | undefined, vars: RenderVars = {}) {
+  return (buttons ?? []).map(b => ({ id: b.id, title: render(b.title, vars) }));
+}
+
+/** Resuelve un mensaje de botones del catálogo, lo interpola y lo envía. */
+async function sendCatalogButtons(opts: {
+  to: string;
+  key: string;
+  vars?: RenderVars;
+  preview: string;
+}) {
+  const m = await getMessage(opts.key);
+  await botSendInteractive({
+    to: opts.to,
+    preview: opts.preview,
+    send: () =>
+      sendButtons({
+        to: opts.to,
+        body: render(m.body, opts.vars),
+        buttons: renderButtons(m.buttons, opts.vars),
+      }),
+  });
+}
+
 // =========================================================================
 // ENTRADA — primer mensaje del cliente
 // =========================================================================
@@ -73,26 +110,26 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
     .maybeSingle();
 
   const isReturning = customer !== null;
+  // `parce` cubre el caso sin nombre tanto para nuevo como recurrente.
   const firstName =
-    (customer?.name ?? ctx.contactName ?? '').split(' ')[0] || (isReturning ? 'parce' : '');
-  const saludo = isReturning
-    ? `¡Quihubo ${firstName}! 🥪 Qué bueno verte de nuevo.`
-    : `${firstName ? `¡Quihubo ${firstName}!` : '¡Quihubo parce!'} 🥪 Soy el bot de Bros and Subs.`;
+    (customer?.name ?? ctx.contactName ?? '').split(' ')[0] || 'parce';
+
+  const saludoMsg = await getMessage(isReturning ? 'saludo.recurrente' : 'saludo.nuevo');
+  const menuMsg = await getMessage('menu.pedir');
+  const body = `${render(saludoMsg.body, { nombre: firstName })}\n${render(menuMsg.body)}`;
 
   await botSendInteractive({
     to: ctx.phone,
     preview: '[saludo + menú pedir]',
+    // Antes había también "🙋 Hablar humano" — lo quitamos para que el
+    // primer touch sea exclusivamente comercial. Si un cliente igual
+    // necesita atención humana puede escribirlo y `manejarTextoLibre`
+    // lo escala vía `escalarHumano`.
     send: () =>
       sendButtons({
         to: ctx.phone,
-        body: `${saludo}\n¿Hacemos un pedido?`,
-        // Antes había también "🙋 Hablar humano" — lo quitamos para que el
-        // primer touch sea exclusivamente comercial. Si un cliente igual
-        // necesita atención humana puede escribirlo y `manejarTextoLibre`
-        // lo escala vía `escalarHumano`.
-        buttons: [
-          { id: 'menu_pedir', title: '🥪 Hacer pedido' },
-        ],
+        body,
+        buttons: renderButtons(menuMsg.buttons),
       }),
   });
 
@@ -141,23 +178,16 @@ export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
       .eq('id', customer.zone_id as string)
       .maybeSingle();
 
-    await botSendInteractive({
+    await sendCatalogButtons({
       to: ctx.phone,
+      key: 'recurrente.confirmar',
       preview: '[confirmar datos recurrente]',
-      send: () =>
-        sendButtons({
-          to: ctx.phone,
-          body:
-            `¡Hola de nuevo, ${(customer.name as string).split(' ')[0]}! 👋\n` +
-            `¿Pedimos a la misma dirección?\n\n` +
-            `📍 ${customer.addr}\n` +
-            `🗺️ ${zone?.name ?? customer.zone_id}` +
-            (zone?.tarifa ? ` · domicilio $${formatCop(zone.tarifa as number)}` : ''),
-          buttons: [
-            { id: 'rec_si', title: '✅ Sí, igual' },
-            { id: 'rec_cambiar', title: '✏️ Cambiar dir' },
-          ],
-        }),
+      vars: {
+        nombre: (customer.name as string).split(' ')[0],
+        direccion: customer.addr as string,
+        zona: (zone?.name as string) ?? (customer.zone_id as string),
+        tarifa: zone?.tarifa ? formatCop(zone.tarifa as number) : '',
+      },
     });
 
     return {
@@ -176,17 +206,8 @@ export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
   }
 
   // Cliente nuevo → registro
-  await botSendText({
-    to: ctx.phone,
-    body:
-      'Veo que es la primera vez que nos escribes 🎉, necesito validar tus datos ' +
-      'para saber si tienes cobertura y entregar tu orden. 😊\n' +
-      'Si no deseas continuar, sólo escribe Salir.',
-  });
-  await botSendText({
-    to: ctx.phone,
-    body: '¿Cuál es tu *nombre completo*? _(Ej: Juan José González)_',
-  });
+  await sendCatalogText(ctx.phone, 'registro.intro');
+  await sendCatalogText(ctx.phone, 'registro.pedir_nombre');
   return { ...ctx.state, step: 'registro_nombre', customer: {}, delivery: {} };
 }
 
@@ -198,10 +219,7 @@ export async function handleConfirmarRecurrente(ctx: HandlerContext): Promise<Fl
   const choice = ctx.incoming.buttonReplyId;
   if (choice === 'rec_si') return enviarLinkPedido(ctx);
   if (choice === 'rec_cambiar') {
-    await botSendText({
-      to: ctx.phone,
-      body: '¿Cuál es tu *nueva dirección*? _(Ej: Cra 43A #5-15, apto 502)_',
-    });
+    await sendCatalogText(ctx.phone, 'direccion.pedir_nueva');
     return { ...ctx.state, step: 'direccion_texto' };
   }
 
@@ -220,18 +238,12 @@ export async function handleConfirmarRecurrente(ctx: HandlerContext): Promise<Fl
 export async function handleRegistroNombre(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text?.trim();
   if (!text || text.length < 2 || text.length > 120) {
-    await botSendText({
-      to: ctx.phone,
-      body: 'Por favor escribime tu *nombre completo* _(entre 2 y 120 caracteres)_.',
-    });
+    await sendCatalogText(ctx.phone, 'registro.nombre_invalido');
     return ctx.state;
   }
 
-  await botSendText({ to: ctx.phone, body: '¡Gracias!' });
-  await botSendText({
-    to: ctx.phone,
-    body: 'Para finalizar tu registro, ¿me permites tu *correo*? _(Ej: crepes@correo.com)_',
-  });
+  await sendCatalogText(ctx.phone, 'registro.gracias');
+  await sendCatalogText(ctx.phone, 'registro.pedir_email');
   return {
     ...ctx.state,
     step: 'registro_email',
@@ -244,30 +256,16 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export async function handleRegistroEmail(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text?.trim();
   if (!text || !EMAIL_RE.test(text) || text.length > 200) {
-    await botSendText({
-      to: ctx.phone,
-      body: 'Ese correo no es válido. Por favor escribilo en formato *nombre@correo.com*.',
-    });
+    await sendCatalogText(ctx.phone, 'registro.email_invalido');
     return ctx.state;
   }
 
   const next: FlowCustomer = { ...ctx.state.customer, email: text };
-  await botSendInteractive({
+  await sendCatalogButtons({
     to: ctx.phone,
+    key: 'registro.confirmar',
     preview: '[confirmar registro nombre+email]',
-    send: () =>
-      sendButtons({
-        to: ctx.phone,
-        body:
-          `Mira la información que guardé:\n` +
-          `*Nombre:* ${next.name ?? '?'}\n` +
-          `*Correo:* ${text}\n\n` +
-          `¿Están correctos tus datos?`,
-        buttons: [
-          { id: 'reg_si', title: '✅ Sí' },
-          { id: 'reg_no', title: '❌ No' },
-        ],
-      }),
+    vars: { nombre: next.name ?? '?', correo: text },
   });
   return { ...ctx.state, step: 'registro_confirmar', customer: next };
 }
@@ -275,19 +273,11 @@ export async function handleRegistroEmail(ctx: HandlerContext): Promise<FlowStat
 export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<FlowState> {
   const choice = ctx.incoming.buttonReplyId;
   if (choice === 'reg_si') {
-    await botSendText({
-      to: ctx.phone,
-      body:
-        '¡Perfecto! 🛵 Ahora necesito saber a dónde llevamos tu pedido.\n' +
-        '¿Cuál es tu *dirección*? _(Ej: Cra 43A #5-15, apto 502)_',
-    });
+    await sendCatalogText(ctx.phone, 'registro.confirmado_pedir_direccion');
     return { ...ctx.state, step: 'direccion_texto' };
   }
   if (choice === 'reg_no') {
-    await botSendText({
-      to: ctx.phone,
-      body: 'No hay drama. Empezamos de nuevo:\n¿Cuál es tu *nombre completo*?',
-    });
+    await sendCatalogText(ctx.phone, 'registro.reiniciar');
     return { ...ctx.state, step: 'registro_nombre', customer: {} };
   }
 
@@ -298,18 +288,11 @@ export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<Flow
     reprompt: async () => {
       // Reenviar el resumen
       const c = ctx.state.customer ?? {};
-      await botSendInteractive({
+      await sendCatalogButtons({
         to: ctx.phone,
+        key: 'registro.confirmar',
         preview: '[reenvío confirmar registro]',
-        send: () =>
-          sendButtons({
-            to: ctx.phone,
-            body: `*Nombre:* ${c.name ?? '?'}\n*Correo:* ${c.email ?? '?'}\n\n¿Están correctos?`,
-            buttons: [
-              { id: 'reg_si', title: '✅ Sí' },
-              { id: 'reg_no', title: '❌ No' },
-            ],
-          }),
+        vars: { nombre: c.name ?? '?', correo: c.email ?? '?' },
       });
       return ctx.state;
     },
@@ -323,10 +306,7 @@ export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<Flow
 export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text?.trim();
   if (!text || text.length < 5 || text.length > 500) {
-    await botSendText({
-      to: ctx.phone,
-      body: 'Necesito una dirección un poco más detallada (mínimo 5 caracteres).',
-    });
+    await sendCatalogText(ctx.phone, 'direccion.invalida');
     return ctx.state;
   }
 
@@ -338,35 +318,43 @@ export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowSta
   const zonesList = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
 
   if (zonesList.length === 0) {
-    await botSendText({
-      to: ctx.phone,
-      body: 'Uy, no tengo zonas configuradas todavía. Escribime *asesor* y te ayudo 🙏',
-    });
+    await sendCatalogText(ctx.phone, 'direccion.sin_zonas');
     return ctx.state;
   }
 
   const next: FlowDelivery = { ...ctx.state.delivery, address: text };
 
+  await sendZoneList(ctx.phone, zonesList, '[lista de zonas]');
+  return { ...ctx.state, step: 'direccion_zona', delivery: next };
+}
+
+/** Envía la lista de zonas usando el mensaje editable `direccion.pedir_zona`. */
+async function sendZoneList(
+  to: string,
+  zonesList: Array<{ id: string; name: string; tarifa: number }>,
+  preview: string,
+) {
+  const m = await getMessage('direccion.pedir_zona');
+  const rowTpl = m.rowDescriptionTemplate ?? 'Domicilio ${{tarifa}}';
   await botSendInteractive({
-    to: ctx.phone,
-    preview: '[lista de zonas]',
+    to,
+    preview,
     send: () =>
       sendList({
-        to: ctx.phone,
-        body: '¿En qué *zona* queda? Tocá la opción que corresponde:',
-        buttonText: 'Ver zonas',
+        to,
+        body: render(m.body),
+        buttonText: m.buttonText ?? 'Ver zonas',
         sections: [
           {
             rows: zonesList.map(z => ({
               id: `zone_${z.id}`,
               title: z.name,
-              description: `Domicilio $${formatCop(z.tarifa)}`,
+              description: render(rowTpl, { tarifa: formatCop(z.tarifa) }),
             })),
           },
         ],
       }),
   });
-  return { ...ctx.state, step: 'direccion_zona', delivery: next };
 }
 
 export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowState> {
@@ -383,25 +371,7 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
           .select('id, name, tarifa')
           .order('name');
         const list = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
-        await botSendInteractive({
-          to: ctx.phone,
-          preview: '[reenvío lista de zonas]',
-          send: () =>
-            sendList({
-              to: ctx.phone,
-              body: '¿En qué *zona* queda? Tocá la opción:',
-              buttonText: 'Ver zonas',
-              sections: [
-                {
-                  rows: list.map(z => ({
-                    id: `zone_${z.id}`,
-                    title: z.name,
-                    description: `Domicilio $${formatCop(z.tarifa)}`,
-                  })),
-                },
-              ],
-            }),
-        });
+        await sendZoneList(ctx.phone, list, '[reenvío lista de zonas]');
         return ctx.state;
       },
     });
@@ -415,28 +385,21 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
     .maybeSingle();
 
   if (!zone) {
-    await botSendText({ to: ctx.phone, body: 'Zona no válida. Probá de nuevo.' });
+    await sendCatalogText(ctx.phone, 'direccion.zona_invalida');
     return ctx.state;
   }
 
   const next: FlowDelivery = { ...ctx.state.delivery, zoneId };
 
-  await botSendInteractive({
+  await sendCatalogButtons({
     to: ctx.phone,
+    key: 'direccion.confirmar',
     preview: '[confirmar dirección + zona]',
-    send: () =>
-      sendButtons({
-        to: ctx.phone,
-        body:
-          `Confirmo tu entrega:\n` +
-          `📍 ${next.address}\n` +
-          `🗺️ ${zone.name} · domicilio $${formatCop(zone.tarifa as number)}\n\n` +
-          `¿Es correcta?`,
-        buttons: [
-          { id: 'dir_si', title: '✅ Sí, correcta' },
-          { id: 'dir_editar', title: '✏️ Editar' },
-        ],
-      }),
+    vars: {
+      direccion: next.address ?? '',
+      zona: zone.name as string,
+      tarifa: formatCop(zone.tarifa as number),
+    },
   });
   return { ...ctx.state, step: 'direccion_confirmar', delivery: next };
 }
@@ -445,10 +408,7 @@ export async function handleDireccionConfirmar(ctx: HandlerContext): Promise<Flo
   const choice = ctx.incoming.buttonReplyId;
   if (choice === 'dir_si') return enviarLinkPedido(ctx);
   if (choice === 'dir_editar') {
-    await botSendText({
-      to: ctx.phone,
-      body: 'Dale, escribime tu *dirección* de nuevo:',
-    });
+    await sendCatalogText(ctx.phone, 'direccion.reeditar');
     return { ...ctx.state, step: 'direccion_texto', delivery: { ...ctx.state.delivery, address: undefined } };
   }
 
@@ -458,18 +418,11 @@ export async function handleDireccionConfirmar(ctx: HandlerContext): Promise<Flo
     lastBotPrompt: '¿La dirección es correcta? (botones: Sí, correcta / Editar)',
     reprompt: async () => {
       const d = ctx.state.delivery ?? {};
-      await botSendInteractive({
+      await sendCatalogButtons({
         to: ctx.phone,
+        key: 'direccion.confirmar',
         preview: '[reenvío confirmar dirección]',
-        send: () =>
-          sendButtons({
-            to: ctx.phone,
-            body: `📍 ${d.address ?? '?'}\n🗺️ ${d.zoneId ?? '?'}\n\n¿Es correcta?`,
-            buttons: [
-              { id: 'dir_si', title: '✅ Sí, correcta' },
-              { id: 'dir_editar', title: '✏️ Editar' },
-            ],
-          }),
+        vars: { direccion: d.address ?? '?', zona: d.zoneId ?? '?', tarifa: '' },
       });
       return ctx.state;
     },
@@ -481,14 +434,7 @@ export async function handleDireccionConfirmar(ctx: HandlerContext): Promise<Flo
 // =========================================================================
 
 export async function handleLinkEnviado(ctx: HandlerContext): Promise<FlowState> {
-  await botSendText({
-    to: ctx.phone,
-    body:
-      'Te dejé el link arriba para armar y pagar tu pedido 🛒\n' +
-      'Apenas completes el pago te confirmo por acá. ' +
-      'Si querés cambiar tu dirección escribime *cambiar dirección*.\n' +
-      'Si necesitás un humano, escribime *asesor*.',
-  });
+  await sendCatalogText(ctx.phone, 'link.post_envio');
   return ctx.state;
 }
 
@@ -532,23 +478,19 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
   }
 
   if (!url) {
-    await botSendText({
-      to: ctx.phone,
-      body: 'Uy, no pude generar tu link de pedido ahora mismo. Probá de nuevo en un momentito 🙏',
-    });
+    await sendCatalogText(ctx.phone, 'link.error');
     return { ...ctx.state, step: 'menu' };
   }
 
+  const linkMsg = await getMessage('link.enviar');
   await botSendInteractive({
     to: ctx.phone,
     preview: '[link tienda: ver carta y pedir]',
     send: () =>
       sendCtaUrl({
         to: ctx.phone,
-        body:
-          '¡Listo! 🥪 Armá tu pedido en nuestra tienda: elegís de la carta y pagás. ' +
-          'Apenas pagues te confirmo por acá.',
-        displayText: 'Ver carta y pedir 🛒',
+        body: render(linkMsg.body),
+        displayText: linkMsg.displayText ?? 'Ver carta y pedir 🛒',
         url,
       }),
   });
@@ -563,19 +505,13 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
 export async function escalarHumano(ctx: HandlerContext, razon: string): Promise<FlowState> {
   await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', ctx.chatId);
   console.log('[bot] escalado a humano', { chatId: ctx.chatId, razon });
-  await botSendText({
-    to: ctx.phone,
-    body: 'Te paso con uno de mis compas humanos, ya te responde en un momentico 🙏',
-  });
+  await sendCatalogText(ctx.phone, 'humano.escalar');
   return { ...ctx.state, step: 'finalizado' };
 }
 
 export async function cancelarFlujo(ctx: HandlerContext): Promise<FlowState> {
   console.log('[bot] flujo cancelado por el cliente', { chatId: ctx.chatId });
-  await botSendText({
-    to: ctx.phone,
-    body: 'Listo, lo dejamos así. Cuando quieras pedir me escribís *pedir* y arrancamos 🥪',
-  });
+  await sendCatalogText(ctx.phone, 'flujo.cancelar');
   return emptyFlowState();
 }
 
@@ -614,29 +550,18 @@ export async function manejarErrorInesperado(opts: {
 }): Promise<void> {
   try {
     await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', opts.chatId);
-    await botSendText({
-      to: opts.phone,
-      body: 'Tuvimos un problema procesando tu mensaje. Te paso con uno de mis compas humanos 🙏',
-    });
+    await sendCatalogText(opts.phone, 'error.inesperado');
   } catch (err) {
     console.error('[bot] manejarErrorInesperado fallback fail', err);
   }
 }
 
 async function reenviarMenu(ctx: HandlerContext): Promise<FlowState> {
-  await botSendInteractive({
+  // En sync con el menú inicial: solo "Hacer pedido" (sin el saludo).
+  await sendCatalogButtons({
     to: ctx.phone,
+    key: 'menu.pedir',
     preview: '[reenvío menú]',
-    send: () =>
-      sendButtons({
-        to: ctx.phone,
-        body: '¿Hacemos un pedido?',
-        // En sync con el menú inicial: solo "Hacer pedido". Ver comentario
-        // en `mostrarMenuInicial`.
-        buttons: [
-          { id: 'menu_pedir', title: '🥪 Hacer pedido' },
-        ],
-      }),
   });
   return { ...ctx.state, step: 'menu' };
 }

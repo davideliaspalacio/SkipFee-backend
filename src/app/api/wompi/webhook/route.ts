@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
 import { sendText } from '@/lib/kapso/client';
 import { recordMessage } from '@/lib/messaging';
+import { getMessage } from '@/lib/bot/messages/catalog';
+import { render } from '@/lib/bot/messages/render';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -131,10 +133,9 @@ export async function POST(request: NextRequest) {
   try {
     const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
     const firstName = (customer?.name ?? '').split(' ')[0] || '';
-    const greeting = firstName ? `${firstName}, ` : '';
-    const body =
-      `¡${greeting}pago recibido! 🎉\n` +
-      `Tu pedido ya pasa a cocina 🥪 Te aviso cuando vaya en camino.`;
+    const saludo = firstName ? `Hola ${firstName}` : 'Hola';
+    const pagadoMsg = await getMessage('notif.pagado');
+    const body = render(pagadoMsg.body, { saludo, nombre: firstName });
 
     const result = await sendText(order.phone, body);
     const wamid = result.messages?.[0]?.id ?? null;

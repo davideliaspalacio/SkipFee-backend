@@ -1,3 +1,8 @@
+import { sendText } from '@/lib/kapso/client';
+import { recordMessage } from '@/lib/messaging';
+import { getMessage, getKeywords } from '@/lib/bot/messages/catalog';
+import { render } from '@/lib/bot/messages/render';
+import { GLOBAL_KEYWORDS } from '@/lib/bot/messages/defaults';
 import type { FlowState } from './state';
 import type { IncomingMessage } from './parser';
 import { loadFlowState, saveFlowState } from './persistence';
@@ -27,22 +32,21 @@ import {
  * - humano/ayuda: transfiere el chat a status='human'; el bot deja de responder
  * - cambiar_dir: vuelve a direccion_texto (útil si el cliente ya tiene link y
  *   se dio cuenta de que se equivocó de dirección)
+ *
+ * Las listas son EDITABLES desde la UI (`keywords.*`); el default param de
+ * `detectGlobalIntent` usa las del código y `routeFlow` le pasa las del catálogo.
  */
-const GLOBAL_KEYWORDS: Record<'cancelar' | 'humano' | 'ayuda' | 'cambiar_dir', string[]> = {
-  cancelar: ['cancelar', 'cancel', 'salir', 'parar', 'stop', 'olvidalo', 'olvídalo'],
-  humano: ['humano', 'asesor', 'persona', 'agente', 'operador', 'operadora'],
-  ayuda: ['ayuda', 'help', 'no entiendo', 'no se', 'no sé'],
-  cambiar_dir: ['cambiar direccion', 'cambiar dirección', 'cambiar la direccion', 'cambiar la dirección'],
-};
+type GlobalIntent = 'cancelar' | 'humano' | 'ayuda' | 'cambiar_dir';
+type GlobalKeywordMap = Record<GlobalIntent, readonly string[]>;
 
-function detectGlobalIntent(text: string | undefined): keyof typeof GLOBAL_KEYWORDS | null {
+function detectGlobalIntent(
+  text: string | undefined,
+  keywords: GlobalKeywordMap = GLOBAL_KEYWORDS,
+): GlobalIntent | null {
   if (!text) return null;
   const norm = text.toLowerCase().trim();
   if (norm.length === 0 || norm.length > 60) return null;
-  for (const [intent, kws] of Object.entries(GLOBAL_KEYWORDS) as Array<[
-    keyof typeof GLOBAL_KEYWORDS,
-    string[],
-  ]>) {
+  for (const [intent, kws] of Object.entries(keywords) as Array<[GlobalIntent, readonly string[]]>) {
     if (kws.some(k => norm === k || norm.startsWith(k + ' '))) return intent;
   }
   return null;
@@ -80,29 +84,32 @@ export async function processFlowMessage(opts: {
 export async function routeFlow(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text;
 
-  // 1. Keywords globales (solo sobre texto, no en button replies)
-  const intent = text ? detectGlobalIntent(text) : null;
+  // 1. Keywords globales (solo sobre texto, no en button replies). Editables.
+  const globalKeywords: GlobalKeywordMap = {
+    cancelar: await getKeywords('keywords.cancelar'),
+    humano: await getKeywords('keywords.humano'),
+    ayuda: await getKeywords('keywords.ayuda'),
+    cambiar_dir: await getKeywords('keywords.cambiar_dir'),
+  };
+  const intent = text ? detectGlobalIntent(text, globalKeywords) : null;
   if (intent === 'cancelar') return cancelarFlujo(ctx);
   if (intent === 'humano' || intent === 'ayuda') {
     return escalarHumano(ctx, `keyword: ${intent}`);
   }
   if (intent === 'cambiar_dir') {
-    // Solo aplica si ya capturó datos antes (sino caería al flujo nuevo)
-    const { handleConfirmarRecurrente: _unused } = await import('./handlers');
-    const { default: ctxModule } = { default: ctx };
-    const { sendText } = await import('@/lib/kapso/client');
-    const { recordMessage } = await import('@/lib/messaging');
+    // Solo aplica si ya capturó datos antes (sino caería al flujo nuevo).
     // Mandar prompt y mover step a direccion_texto preservando customer.
-    const body = '¿Cuál es tu *nueva dirección*? _(Ej: Cra 43A #5-15, apto 502)_';
-    const result = await sendText(ctxModule.phone, body);
+    const m = await getMessage('direccion.pedir_nueva');
+    const body = render(m.body);
+    const result = await sendText(ctx.phone, body);
     const wamid = result.messages?.[0]?.id ?? null;
-    await recordMessage({ phone: ctxModule.phone, direction: 'bot', body, kapsoMessageId: wamid });
+    await recordMessage({ phone: ctx.phone, direction: 'bot', body, kapsoMessageId: wamid });
     return { ...ctx.state, step: 'direccion_texto', delivery: { ...ctx.state.delivery, address: undefined } };
   }
 
   // 2. Intención de pedir desde cualquier step → arranca/reanuda el flujo
   //    de pedido. Cubre el texto exacto del botón de "carrito vencido".
-  if (detectPedirIntent(text)) return iniciarPedido(ctx);
+  if (detectPedirIntent(text, await getKeywords('keywords.pedir'))) return iniciarPedido(ctx);
 
   // 3. Dispatch por step
   switch (ctx.state.step) {
