@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
-import type { PromotionRow } from '@/lib/checkout/promotions';
+import { isPromotionLiveNow, type PromotionRow } from '@/lib/checkout/promotions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -40,7 +40,12 @@ export async function GET() {
     return jsonWithCors({ ok: false, error: error.message }, 500);
   }
 
-  const rows = (promos ?? []) as PromotionRow[];
+  // Filtramos por día/hora EN EL BACKEND: solo devolvemos lo que aplica
+  // AHORA (en hora Bogotá) para que el storefront no tenga que reimplementar
+  // la lógica. Las del rango de calendario que NO sean del día (o estén
+  // fuera de su ventana horaria) quedan ocultas al cliente.
+  const now = new Date();
+  const rows = ((promos ?? []) as PromotionRow[]).filter(p => isPromotionLiveNow(p, now));
 
   // Cosecha ids únicos para hidratar productos en una sola query.
   const productIds = new Set<string>();

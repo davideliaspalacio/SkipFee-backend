@@ -169,6 +169,19 @@ export function toAppliedPromotion(promo: PromotionRow, amount: number): Applied
   };
 }
 
+/**
+ * True si la promo está vigente AHORA (activa + dentro de calendario + para
+ * weekday también dentro del día/ventana horaria). Lo usa el endpoint público
+ * `/api/promotions/active` para devolver solo lo que el cliente puede usar
+ * en este momento — así el frontend no tiene que filtrar.
+ */
+export function isPromotionLiveNow(promo: PromotionRow, now: Date): boolean {
+  if (!promo.active) return false;
+  if (!isInCalendarWindow(promo, now)) return false;
+  if (promo.kind === 'weekday' && !isInWeekdayWindow(promo, now)) return false;
+  return true;
+}
+
 // -------------------- helpers privados --------------------
 
 function isInCalendarWindow(promo: PromotionRow, now: Date): boolean {
