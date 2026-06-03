@@ -15,3 +15,11 @@ export async function sendText(to: string, body: string) {
     body,
   });
 }
+
+export async function sendImage(to: string, link: string, caption?: string) {
+  return kapso.messages.sendImage({
+    phoneNumberId: env.KAPSO_PHONE_NUMBER_ID,
+    to,
+    image: { link, ...(caption ? { caption } : {}) },
+  });
+}

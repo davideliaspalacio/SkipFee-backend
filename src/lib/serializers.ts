@@ -93,6 +93,7 @@ export function serializeChat(row: ChatRow, stats?: { prevOrders: number; avgTic
 interface MessageRow {
   direction: string;
   body: string;
+  media_url?: string | null;
   created_at: string;
 }
 
@@ -108,5 +109,6 @@ export function serializeMessage(row: MessageRow) {
     who: row.direction,
     text: row.body,
     time,
+    mediaUrl: row.media_url ?? null,
   };
 }
