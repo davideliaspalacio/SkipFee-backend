@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { computeOrderTotals } from './totals';
+import type { PromotionRow } from './promotions';
 
 const PRODUCTS = [
   { id: 'p01', name: 'Pastrami Bros', price: 28000, available: true },
@@ -77,7 +78,10 @@ describe('computeOrderTotals', () => {
     expect(r.missing).toEqual(['nope']);
   });
 
-  it('sin zona: delivery usa base_delivery_fee de settings y no hay recargo', () => {
+  it('sin zona: delivery = 0 (no inventamos precio sin saber dónde entregar)', () => {
+    // Caso: el cliente abre el carrito antes de que el bot haya capturado la
+    // dirección. Mostrar `settings.base_delivery_fee` como fallback genera
+    // un cambio visual cuando llega la zona real ($4.500 → $5.000) y confunde.
     const r = computeOrderTotals({
       items: [{ productId: 'p01', qty: 1 }],
       products: PRODUCTS,
@@ -85,9 +89,9 @@ describe('computeOrderTotals', () => {
       settings: SETTINGS,
       now: PEAK,
     });
-    expect(r.delivery).toBe(4500);
+    expect(r.delivery).toBe(0);
     expect(r.peakSurcharge).toBe(0);
-    expect(r.total).toBe(28000 + 4500);
+    expect(r.total).toBe(28000);
   });
 
   it('carrito vacío: totales en 0, delivery 0', () => {
@@ -102,5 +106,93 @@ describe('computeOrderTotals', () => {
     expect(r.delivery).toBe(0);
     expect(r.total).toBe(0);
     expect(r.items).toEqual([]);
+    expect(r.discount).toBe(0);
+    expect(r.appliedPromo).toBeNull();
+  });
+});
+
+describe('computeOrderTotals — con promociones', () => {
+  function promo(over: Partial<PromotionRow> = {}): PromotionRow {
+    return {
+      id: 'pr1', kind: 'product', name: 'P', description: null,
+      discount_type: 'percent', discount_value: 20,
+      min_subtotal: 0, config: {}, active: true,
+      starts_at: null, ends_at: null,
+      ...over,
+    };
+  }
+
+  it('descuenta solo del subtotal, NO del delivery', () => {
+    const r = computeOrderTotals({
+      items: [{ productId: 'p01', qty: 1 }],
+      products: PRODUCTS,
+      zone: ZONE,
+      settings: SETTINGS,
+      now: OFFPEAK,
+      promotions: [promo({ discount_value: 10 })], // 10% off
+    });
+    expect(r.subtotal).toBe(28000);
+    expect(r.discount).toBe(2800);
+    expect(r.delivery).toBe(4500); // sin tocar
+    expect(r.total).toBe(28000 - 2800 + 4500);
+    expect(r.appliedPromo?.id).toBe('pr1');
+    expect(r.appliedPromo?.amount).toBe(2800);
+  });
+
+  it('elige la promo con mayor descuento entre varias activas', () => {
+    const r = computeOrderTotals({
+      items: [{ productId: 'p01', qty: 1 }],
+      products: PRODUCTS,
+      zone: ZONE,
+      settings: SETTINGS,
+      now: OFFPEAK,
+      promotions: [
+        promo({ id: 'p10', discount_value: 10 }),  // 2.800
+        promo({ id: 'p20', discount_value: 20 }),  // 5.600  ← gana
+      ],
+    });
+    expect(r.appliedPromo?.id).toBe('p20');
+    expect(r.discount).toBe(5600);
+  });
+
+  it('carrito vacío: ignora promos (sin discount, sin appliedPromo)', () => {
+    const r = computeOrderTotals({
+      items: [],
+      products: PRODUCTS,
+      zone: ZONE,
+      settings: SETTINGS,
+      now: OFFPEAK,
+      promotions: [promo({ discount_value: 50 })],
+    });
+    expect(r.discount).toBe(0);
+    expect(r.appliedPromo).toBeNull();
+  });
+
+  it('promo no aplicable (sin elegibles en carrito) ⇒ discount 0', () => {
+    const r = computeOrderTotals({
+      items: [{ productId: 'p01', qty: 1 }],
+      products: PRODUCTS,
+      zone: ZONE,
+      settings: SETTINGS,
+      now: OFFPEAK,
+      promotions: [promo({ config: { product_ids: ['b03'] } })], // solo limonada
+    });
+    expect(r.discount).toBe(0);
+    expect(r.appliedPromo).toBeNull();
+    expect(r.total).toBe(28000 + 4500);
+  });
+
+  it('descuento nunca lleva el subtotal a negativo (Math.max)', () => {
+    const r = computeOrderTotals({
+      items: [{ productId: 'b03', qty: 1 }], // 4.500
+      products: PRODUCTS,
+      zone: ZONE,
+      settings: SETTINGS,
+      now: OFFPEAK,
+      promotions: [promo({ discount_type: 'fixed', discount_value: 100000 })],
+    });
+    expect(r.subtotal).toBe(4500);
+    expect(r.discount).toBe(4500); // cap por el helper de fixed
+    expect(r.total).toBe(0 + 4500); // 0 productos + delivery
   });
 });

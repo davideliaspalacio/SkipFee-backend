@@ -1,22 +1,11 @@
 import { supabaseAdmin } from '@/lib/db';
+import { ACTIVE_STATUSES, startOfTodayInBogota } from '@/lib/orders-stats';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const ACTIVE_STATUSES = ['nuevo', 'pagado', 'cocina', 'empacado', 'ruta'];
 const ATTENTION_MINUTES = 30;
 const PALETTE = ['#E85D04', '#606C38', '#5E6AD2', '#A16207', '#0EA5E9', '#15803D'];
-
-function startOfTodayInBogota(): Date {
-  // Bogotá es UTC-5. Calculamos las 00:00 hora Bogotá del día actual.
-  const now = new Date();
-  const bogotaNow = new Date(now.getTime() - 5 * 60 * 60 * 1000);
-  const y = bogotaNow.getUTCFullYear();
-  const m = bogotaNow.getUTCMonth();
-  const d = bogotaNow.getUTCDate();
-  // Volver a UTC: 00:00 Bogotá = 05:00 UTC del mismo día
-  return new Date(Date.UTC(y, m, d, 5, 0, 0));
-}
 
 const DAY_ABBR = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
 

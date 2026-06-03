@@ -1,7 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
-import { sendText } from '@/lib/kapso/client';
+import { sendImage, sendText } from '@/lib/kapso/client';
 import { recordMessage } from '@/lib/messaging';
 import { serializeMessage } from '@/lib/serializers';
 
@@ -24,7 +24,7 @@ export async function GET(
 
   const { data, error } = await supabaseAdmin()
     .from('messages')
-    .select('direction, body, created_at')
+    .select('direction, body, media_url, created_at')
     .eq('chat_id', id)
     .order('created_at', { ascending: true })
     .limit(limit);
@@ -38,9 +38,17 @@ export async function GET(
   return Response.json({ ok: true, messages });
 }
 
-const bodySchema = z.object({
-  body: z.string().min(1).max(4096),
-});
+// Acepta texto, imagen, o imagen con caption. Si viene imageUrl, body es la
+// caption opcional; si no, body es obligatorio.
+const bodySchema = z
+  .object({
+    body: z.string().max(4096).optional(),
+    imageUrl: z.string().url().optional(),
+  })
+  .refine(
+    v => (v.body && v.body.trim().length > 0) || (v.imageUrl && v.imageUrl.length > 0),
+    { message: 'Debes enviar body o imageUrl' },
+  );
 
 /**
  * POST /api/chats/:id/messages
@@ -83,10 +91,13 @@ export async function POST(
     return Response.json({ ok: false, error: 'Chat no encontrado' }, { status: 404 });
   }
 
-  // 2. Enviar vía Kapso
+  // 2. Enviar vía Kapso (imagen si vino imageUrl, si no texto)
+  const caption = parsed.body?.trim() ?? '';
   let result;
   try {
-    result = await sendText(chat.phone, parsed.body);
+    result = parsed.imageUrl
+      ? await sendImage(chat.phone, parsed.imageUrl, caption || undefined)
+      : await sendText(chat.phone, caption);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[chats/messages] Kapso error', err);
@@ -99,8 +110,9 @@ export async function POST(
     await recordMessage({
       phone: chat.phone,
       direction: 'out',
-      body: parsed.body,
+      body: caption,
       kapsoMessageId: wamid,
+      mediaUrl: parsed.imageUrl ?? null,
     });
   } catch (err) {
     console.error('[chats/messages] persistence error (mensaje sí se envió)', err);

@@ -35,9 +35,11 @@ describe('emptyCart', () => {
     expect(emptyCart()).toEqual({
       items: [],
       subtotal: 0,
+      discount: 0,
       delivery: 0,
       peakSurcharge: 0,
       total: 0,
+      appliedPromo: null,
     });
   });
 });

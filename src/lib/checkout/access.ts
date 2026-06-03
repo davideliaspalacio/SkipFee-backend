@@ -33,6 +33,11 @@ const PUBLIC_METHOD_PATHS: Array<{ method: string; pathname: string }> = [
   { method: 'POST', pathname: '/api/orders' }, // el bot crea pedido para el cliente
   { method: 'POST', pathname: '/api/quotes' }, // el bot cotiza
   { method: 'GET', pathname: '/api/zones' },    // la tienda lista zonas
+  // GET /api/promotions/active: lo consume la tienda web (PromoActiveCard
+  // arriba del catálogo + lista del OrderPanel + badges en cada ProductCard).
+  // Solo devuelve promos activas vigentes AHORA — el CRUD /api/promotions
+  // (POST/PATCH/DELETE y GET completo) sigue privado.
+  { method: 'GET', pathname: '/api/promotions/active' },
 ];
 
 /** Orígenes locales del front en desarrollo (Vite). */

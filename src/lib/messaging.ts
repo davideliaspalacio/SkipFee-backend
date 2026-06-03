@@ -18,6 +18,7 @@ export async function recordMessage(opts: {
   body: string;
   kapsoMessageId?: string | null;
   name?: string;
+  mediaUrl?: string | null;
 }): Promise<{ chatId: string }> {
   const chatId = `wa:${opts.phone}`;
   const nowIso = new Date().toISOString();
@@ -35,11 +36,17 @@ export async function recordMessage(opts: {
   );
   if (insertChatError) throw insertChatError;
 
-  // 2. Actualizar campos que cambian con cada mensaje
+  // 2. Actualizar campos que cambian con cada mensaje. Para imágenes sin
+  // caption mostramos "📷 Imagen" como preview en la lista de chats.
+  const previewBase = opts.body.trim().length > 0
+    ? opts.body
+    : opts.mediaUrl
+      ? '📷 Imagen'
+      : '';
   const { error: updateChatError } = await sb
     .from('chats')
     .update({
-      last: opts.body.slice(0, 200),
+      last: previewBase.slice(0, 200),
       time: hhmm(),
       last_message_at: nowIso,
     })
@@ -52,6 +59,7 @@ export async function recordMessage(opts: {
     direction: opts.direction,
     body: opts.body,
     kapso_message_id: opts.kapsoMessageId ?? null,
+    media_url: opts.mediaUrl ?? null,
   });
   if (insertMsgError) throw insertMsgError;
 

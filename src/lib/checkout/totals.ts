@@ -1,4 +1,5 @@
 import { bogotaTime, isWithinRange } from '@/lib/pricing';
+import { resolveAutomaticPromotion, toAppliedPromotion, type AppliedPromotion, type PromotionRow } from './promotions';
 
 /**
  * Lógica de precio compartida entre /api/orders y el checkout web.
@@ -64,9 +65,13 @@ export interface OrderTotals {
   items: CartLine[];
   itemsToInsert: OrderItemInsert[];
   subtotal: number;
+  /** Descuento total aplicado por la promo automática elegida (siempre ≥0). */
+  discount: number;
   delivery: number;
   peakSurcharge: number;
   total: number;
+  /** Promo aplicada (la mejor entre las pasadas), o `null` si ninguna aplicó. */
+  appliedPromo: AppliedPromotion | null;
   /** Nombres de productos existentes pero no disponibles. */
   unavailable: string[];
   /** IDs de productos que no existen en el catálogo. */
@@ -79,9 +84,13 @@ export function computeOrderTotals(input: {
   zone: TotalsZone | null;
   settings: TotalsSettings;
   now?: Date;
+  /** Promos automáticas candidatas. Si no se pasan, no hay descuento.
+   *  La función elige internamente la que más descuento dé al cliente. */
+  promotions?: PromotionRow[];
 }): OrderTotals {
   const { items, products, zone, settings } = input;
   const now = input.now ?? new Date();
+  const promotions = input.promotions ?? [];
 
   const productById = new Map(products.map(p => [p.id, p]));
 
@@ -113,18 +122,44 @@ export function computeOrderTotals(input: {
 
   let delivery = 0;
   let peakSurcharge = 0;
-  if (hasItems) {
-    if (zone) {
-      peakSurcharge = isPeak ? zone.recargo : 0;
-      delivery = zone.tarifa + peakSurcharge;
-    } else {
-      // Sin zona conocida: tarifa base, sin recargo de hora pico.
-      delivery = settings.base_delivery_fee;
-      peakSurcharge = 0;
-    }
+  if (hasItems && zone) {
+    // El precio del domicilio SIEMPRE sale de la zona seleccionada (la que
+    // el bot capturó). No usamos `settings.base_delivery_fee` como fallback
+    // porque mostrar un precio inventado y luego cambiarlo a `zone.tarifa`
+    // cuando llega la dirección confunde al cliente (se ve $4.500 y después
+    // $5.000 sin razón aparente).
+    //
+    // Si no hay zona conocida ⇒ delivery = 0 y el storefront NO muestra la
+    // línea hasta que el bot/cliente complete la entrega.
+    peakSurcharge = isPeak ? zone.recargo : 0;
+    delivery = zone.tarifa + peakSurcharge;
   }
+  // Nota: `settings.base_delivery_fee` queda exclusivamente para la
+  // pre-cotización del bot (/api/quotes) cuando el cliente aún no eligió zona.
 
-  const total = subtotal + delivery;
+  // Resolvemos la mejor promo automática y la descontamos SOLO del subtotal
+  // (nunca del delivery — regla de negocio). El cálculo es:
+  //   total = max(0, subtotal - discount) + delivery
+  // El `max` blinda contra promos mal configuradas que descontarían más que
+  // el subtotal (e.g. un `fixed` muy alto vs subtotal pequeño).
+  const promoResult = hasItems
+    ? resolveAutomaticPromotion({ items, products, subtotal, now, promotions })
+    : null;
+  const discount = promoResult?.discount ?? 0;
+  const appliedPromo = promoResult ? toAppliedPromotion(promoResult.promotion, discount) : null;
 
-  return { items: lines, itemsToInsert, subtotal, delivery, peakSurcharge, total, unavailable, missing };
+  const total = Math.max(0, subtotal - discount) + delivery;
+
+  return {
+    items: lines,
+    itemsToInsert,
+    subtotal,
+    discount,
+    delivery,
+    peakSurcharge,
+    total,
+    appliedPromo,
+    unavailable,
+    missing,
+  };
 }

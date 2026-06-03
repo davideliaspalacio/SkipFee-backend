@@ -4,6 +4,7 @@ import { jsonWithCors, preflight } from '@/lib/checkout/cors';
 import { buildCatalog, classifyOrder, emptyCart } from '@/lib/checkout/shape';
 import { computeOrderTotals, type TotalsProduct, type TotalsZone } from '@/lib/checkout/totals';
 import { loadOpenState } from '@/lib/hours';
+import type { PromotionRow } from '@/lib/checkout/promotions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -83,11 +84,16 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
     return jsonWithCors({ ok: true, status });
   }
 
-  // Catálogo + zonas + settings (para recalcular el carrito y embeber catálogo).
-  const [{ data: products }, { data: zones }, { data: settings }, openState] = await Promise.all([
+  // Catálogo + zonas + settings + promos activas + estado de operación (todo en paralelo).
+  // Las promos las recalculamos en cada GET para que el cart refleje la promo
+  // vigente AHORA; `openState` decide si la tienda muestra "cerrado".
+  const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').order('name'),
     sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
+    sb.from('promotions')
+      .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
+      .eq('active', true),
     loadOpenState(sb),
   ]);
 
@@ -114,13 +120,16 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
       zone,
       settings,
       now: new Date(),
+      promotions: (promotions ?? []) as PromotionRow[],
     });
     cart = {
       items: totals.items,
       subtotal: totals.subtotal,
+      discount: totals.discount,
       delivery: totals.delivery,
       peakSurcharge: totals.peakSurcharge,
       total: totals.total,
+      appliedPromo: totals.appliedPromo,
     };
   } else {
     cart = emptyCart();
