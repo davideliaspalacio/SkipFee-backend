@@ -56,14 +56,27 @@ export function buildCatalog(products: CatalogProduct[]): Catalog {
 export interface Cart {
   items: Array<{ productId: string; name: string; qty: number; price: number; lineTotal: number }>;
   subtotal: number;
+  /** Descuento total aplicado por la promo automática (siempre ≥0). 0 si no hay. */
+  discount: number;
   delivery: number;
   peakSurcharge: number;
   total: number;
+  /** Promo aplicada al carrito en este recálculo. `null` si ninguna aplica. */
+  appliedPromo: CartAppliedPromo | null;
+}
+
+export interface CartAppliedPromo {
+  id: string;
+  name: string;
+  description: string | null;
+  kind: 'product' | 'weekday';
+  discountType: 'percent' | 'fixed' | 'free_item' | 'two_for_one';
+  amount: number;
 }
 
 /** Carrito vacío (cliente aún no agregó nada). */
 export function emptyCart(): Cart {
-  return { items: [], subtotal: 0, delivery: 0, peakSurcharge: 0, total: 0 };
+  return { items: [], subtotal: 0, discount: 0, delivery: 0, peakSurcharge: 0, total: 0, appliedPromo: null };
 }
 
 export type CheckoutStatus = 'valida' | 'expirada' | 'no_encontrada' | 'ya_usada';

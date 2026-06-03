@@ -162,4 +162,73 @@ describe('PUT /api/checkout/:orderId/cart', () => {
     const res = await OPTIONS();
     expect(res.status).toBe(204);
   });
+
+  it('aplica promo activa: discount y appliedPromo en cart + promo_id/discount en orders', async () => {
+    // Promo: 20% off sobre Pastrami (p01).
+    const tables = tablesFor(validBorrador());
+    supabaseStub = makeSupabaseStub({
+      ...tables,
+      promotions: {
+        rows: [{
+          id: 'pr-pastrami',
+          kind: 'product',
+          name: '20% Pastrami',
+          description: null,
+          discount_type: 'percent',
+          discount_value: 20,
+          min_subtotal: 0,
+          config: { product_ids: ['p01'] },
+          active: true,
+          starts_at: null,
+          ends_at: null,
+        }],
+      },
+    });
+
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', {
+        items: [{ productId: 'p01', qty: 1 }],
+        delivery: { address: 'X', zoneId: 'poblado' },
+      }),
+      asyncParams({ orderId: 'o1' }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.cart.subtotal).toBe(28000);
+    expect(body.cart.discount).toBe(5600);  // 20% de 28.000
+    expect(body.cart.delivery).toBe(4500);  // sin descuento
+    expect(body.cart.total).toBe(28000 - 5600 + 4500);
+    expect(body.cart.appliedPromo).toMatchObject({
+      id: 'pr-pastrami',
+      name: '20% Pastrami',
+      kind: 'product',
+      discountType: 'percent',
+      amount: 5600,
+    });
+
+    // Persistencia en orders: promo_id + discount + total ya con descuento.
+    const [updPayload] = updateCapture.mock.calls[0];
+    expect(updPayload.promo_id).toBe('pr-pastrami');
+    expect(updPayload.discount).toBe(5600);
+    expect(updPayload.total).toBe(26900);
+  });
+
+  it('sin promos activas: discount 0, appliedPromo null, promo_id null en orders', async () => {
+    supabaseStub = makeSupabaseStub(tablesFor(validBorrador()));
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', {
+        items: [{ productId: 'p01', qty: 1 }],
+        delivery: { address: 'X', zoneId: 'poblado' },
+      }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.cart.discount).toBe(0);
+    expect(body.cart.appliedPromo).toBeNull();
+    const [updPayload] = updateCapture.mock.calls[0];
+    expect(updPayload.discount).toBe(0);
+    expect(updPayload.promo_id).toBeNull();
+  });
 });
