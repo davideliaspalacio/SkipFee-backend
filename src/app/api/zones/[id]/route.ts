@@ -21,6 +21,7 @@ const patchSchema = z.object({
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
   lat: z.number().optional(),
   lng: z.number().optional(),
+  archived: z.boolean().optional(), // archivar (true) / desarchivar (false)
 });
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {

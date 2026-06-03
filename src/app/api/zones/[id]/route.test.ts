@@ -31,6 +31,18 @@ describe('PATCH /api/zones/:id', () => {
     expect(updateCapture.mock.calls[0][0]).toEqual({ name: 'Poblado Nuevo', tarifa: 7000 });
   });
 
+  it('desarchiva con archived:false', async () => {
+    supabaseStub = makeSupabaseStub({
+      zones: { onUpdate: (p: unknown) => { updateCapture(p); return { data: { id: 'poblado', archived: false } }; } },
+    });
+    const res = await PATCH(
+      jsonRequest('http://x/api/zones/poblado', 'PATCH', { archived: false }),
+      asyncParams({ id: 'poblado' }),
+    );
+    expect(res.status).toBe(200);
+    expect(updateCapture.mock.calls[0][0]).toEqual({ archived: false });
+  });
+
   it('400 sin campos', async () => {
     supabaseStub = makeSupabaseStub({ zones: {} });
     const res = await PATCH(jsonRequest('http://x/api/zones/poblado', 'PATCH', {}), asyncParams({ id: 'poblado' }));
