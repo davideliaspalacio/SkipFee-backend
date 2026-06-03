@@ -72,12 +72,10 @@ interface ChatRow {
   unread: number;
   status: string;
   zone_id: string | null;
-  prev_orders: number;
-  avg_ticket: number;
   last_message_at: string | null;
 }
 
-export function serializeChat(row: ChatRow) {
+export function serializeChat(row: ChatRow, stats?: { prevOrders: number; avgTicket: number }) {
   return {
     id: row.id,
     name: row.name,
@@ -87,8 +85,8 @@ export function serializeChat(row: ChatRow) {
     unread: row.unread,
     status: row.status,
     zone: row.zone_id ?? '',
-    prevOrders: row.prev_orders,
-    avgTicket: row.avg_ticket,
+    prevOrders: stats?.prevOrders ?? 0,
+    avgTicket: stats?.avgTicket ?? 0,
   };
 }
 
