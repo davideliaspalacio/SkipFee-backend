@@ -322,10 +322,11 @@ export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowSta
     return ctx.state;
   }
 
-  // Cargar zonas activas para mostrarlas como lista.
+  // Cargar zonas activas (no archivadas) para mostrarlas como lista.
   const { data: zones } = await supabaseAdmin()
     .from('zones')
     .select('id, name, tarifa')
+    .eq('archived', false)
     .order('name');
   const zonesList = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
 
@@ -381,6 +382,7 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
         const { data: zones } = await supabaseAdmin()
           .from('zones')
           .select('id, name, tarifa')
+          .eq('archived', false)
           .order('name');
         const list = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
         await sendZoneList(ctx.phone, list, '[reenvío lista de zonas]');

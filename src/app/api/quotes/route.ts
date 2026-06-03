@@ -1,7 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
-import { bogotaTime, isWithinRange } from '@/lib/pricing';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -102,7 +101,7 @@ export async function POST(request: NextRequest) {
   // 2. Cargar settings (1 fila id=1)
   const { data: settings, error: setErr } = await sb
     .from('settings')
-    .select('peak_start, peak_end, peak_surcharge, base_delivery_fee')
+    .select('base_delivery_fee')
     .eq('id', 1)
     .single();
 
@@ -112,11 +111,11 @@ export async function POST(request: NextRequest) {
   }
 
   // 3. Cargar zona si se proveyó
-  let zone: { id: string; name: string; tarifa: number; recargo: number } | null = null;
+  let zone: { id: string; name: string; tarifa: number } | null = null;
   if (parsed.zoneId) {
     const { data: z, error: zErr } = await sb
       .from('zones')
-      .select('id, name, tarifa, recargo')
+      .select('id, name, tarifa')
       .eq('id', parsed.zoneId)
       .single();
     if (zErr || !z) {
@@ -128,10 +127,9 @@ export async function POST(request: NextRequest) {
     zone = z;
   }
 
-  // 4. Calcular domicilio + recargo hora pico
+  // 4. Calcular domicilio (hora pico eliminada: sin recargo)
   const baseDelivery = zone ? zone.tarifa : settings.base_delivery_fee;
-  const isPeak = isWithinRange(bogotaTime(), settings.peak_start, settings.peak_end);
-  const peakSurcharge = isPeak ? (zone ? zone.recargo : settings.peak_surcharge) : 0;
+  const peakSurcharge = 0;
   const total = subtotal + baseDelivery + peakSurcharge;
 
   return Response.json({
@@ -140,7 +138,7 @@ export async function POST(request: NextRequest) {
     delivery: baseDelivery,
     peakSurcharge,
     total,
-    isPeakHour: isPeak,
+    isPeakHour: false,
     zone: zone ? { id: zone.id, name: zone.name } : null,
     items: itemsResolved,
   });

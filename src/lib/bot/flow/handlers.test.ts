@@ -51,8 +51,8 @@ beforeEach(() => {
     customers: { single: null },
     chats: { onUpdate: () => ({}) },
     zones: { rows: [
-      { id: 'poblado', name: 'El Poblado', tarifa: 4500 },
-      { id: 'envigado', name: 'Envigado', tarifa: 5500 },
+      { id: 'poblado', name: 'El Poblado', tarifa: 4500, archived: false },
+      { id: 'envigado', name: 'Envigado', tarifa: 5500, archived: false },
     ] },
   });
   sendTextMock.mockReset().mockResolvedValue({ messages: [{ id: 'wamid-1' }] });

@@ -1,4 +1,3 @@
-import { bogotaTime, isWithinRange } from '@/lib/pricing';
 import { resolveAutomaticPromotion, toAppliedPromotion, type AppliedPromotion, type PromotionRow } from './promotions';
 
 /**
@@ -9,12 +8,10 @@ import { resolveAutomaticPromotion, toAppliedPromotion, type AppliedPromotion, t
  * total más las líneas listas para mostrar (forma del contrato) y para persistir
  * en `order_items`.
  *
- * Reglas (espejo de la lógica original de /api/orders):
+ * Reglas:
  *  - subtotal = Σ price * qty (precio actual del producto).
- *  - delivery = zone.tarifa + (hora pico ? zone.recargo : 0). Sin zona, se usa
- *    settings.base_delivery_fee y no hay recargo (no tenemos dato de la zona).
- *  - hora pico: now (en America/Bogota, HH:MM) dentro de [peak_start, peak_end].
- *  - peakSurcharge se reporta aparte (lo que el cliente ve como recargo).
+ *  - delivery = zone.tarifa (sin zona ⇒ 0). La "hora pico" fue ELIMINADA del
+ *    producto: `peakSurcharge` siempre es 0 (se conserva por compat del contrato).
  *  - carrito vacío ⇒ delivery 0 y total 0 (aún no hay nada que enviar).
  *  - productos no disponibles ⇒ unavailable[] (por nombre); inexistentes ⇒
  *    missing[] (por id). El caller decide cómo responder (409 / 400).
@@ -31,7 +28,8 @@ export interface TotalsZone {
   id: string;
   name?: string;
   tarifa: number;
-  recargo: number;
+  /** @deprecated hora pico eliminada; ya no se usa para el domicilio. */
+  recargo?: number;
   lat?: number;
   lng?: number;
 }
@@ -88,7 +86,7 @@ export function computeOrderTotals(input: {
    *  La función elige internamente la que más descuento dé al cliente. */
   promotions?: PromotionRow[];
 }): OrderTotals {
-  const { items, products, zone, settings } = input;
+  const { items, products, zone } = input;
   const now = input.now ?? new Date();
   const promotions = input.promotions ?? [];
 
@@ -118,24 +116,17 @@ export function computeOrderTotals(input: {
 
   // Carrito vacío (o todo inválido): nada que enviar ⇒ delivery/total 0.
   const hasItems = lines.length > 0;
-  const isPeak = isWithinRange(bogotaTime(now), settings.peak_start, settings.peak_end);
 
+  // El precio del domicilio SIEMPRE sale de la zona seleccionada (la que el bot
+  // capturó). Sin zona ⇒ delivery = 0 y el storefront NO muestra la línea hasta
+  // que se complete la entrega. La hora pico fue eliminada: ya no hay recargo.
   let delivery = 0;
-  let peakSurcharge = 0;
   if (hasItems && zone) {
-    // El precio del domicilio SIEMPRE sale de la zona seleccionada (la que
-    // el bot capturó). No usamos `settings.base_delivery_fee` como fallback
-    // porque mostrar un precio inventado y luego cambiarlo a `zone.tarifa`
-    // cuando llega la dirección confunde al cliente (se ve $4.500 y después
-    // $5.000 sin razón aparente).
-    //
-    // Si no hay zona conocida ⇒ delivery = 0 y el storefront NO muestra la
-    // línea hasta que el bot/cliente complete la entrega.
-    peakSurcharge = isPeak ? zone.recargo : 0;
-    delivery = zone.tarifa + peakSurcharge;
+    delivery = zone.tarifa;
   }
-  // Nota: `settings.base_delivery_fee` queda exclusivamente para la
-  // pre-cotización del bot (/api/quotes) cuando el cliente aún no eligió zona.
+  // `peakSurcharge` se conserva en 0 por compatibilidad del contrato del carrito
+  // (el frontend auto-oculta la línea cuando es 0).
+  const peakSurcharge = 0;
 
   // Resolvemos la mejor promo automática y la descontamos SOLO del subtotal
   // (nunca del delivery — regla de negocio). El cálculo es:

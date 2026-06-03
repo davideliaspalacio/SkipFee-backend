@@ -1,6 +1,5 @@
 import { Type, type FunctionDeclaration } from '@google/genai';
 import { supabaseAdmin } from '@/lib/db';
-import { bogotaTime, isWithinRange } from '@/lib/pricing';
 
 /**
  * Definiciones de tools que Gemini puede invocar.
@@ -161,27 +160,23 @@ export async function cotizarPedido(args: {
 
   const { data: settings } = await sb
     .from('settings')
-    .select('peak_start, peak_end, peak_surcharge, base_delivery_fee')
+    .select('base_delivery_fee')
     .eq('id', 1)
     .single();
 
-  let zoneInfo: { id: string; name: string; tarifa: number; recargo: number } | null = null;
+  let zoneInfo: { id: string; name: string; tarifa: number } | null = null;
   if (args.zoneId) {
     const { data: z } = await sb
       .from('zones')
-      .select('id, name, tarifa, recargo')
+      .select('id, name, tarifa')
       .eq('id', args.zoneId)
       .single();
     if (z) zoneInfo = z;
   }
 
   const baseDelivery = zoneInfo?.tarifa ?? settings?.base_delivery_fee ?? 4500;
-  const isPeak = isWithinRange(
-    bogotaTime(),
-    settings?.peak_start ?? null,
-    settings?.peak_end ?? null,
-  );
-  const peakSurcharge = isPeak ? (zoneInfo?.recargo ?? settings?.peak_surcharge ?? 1500) : 0;
+  // Hora pico eliminada: sin recargo.
+  const peakSurcharge = 0;
   const total = subtotal + baseDelivery + peakSurcharge;
 
   return {
@@ -190,7 +185,7 @@ export async function cotizarPedido(args: {
     subtotal,
     delivery: baseDelivery,
     peakSurcharge,
-    isPeakHour: isPeak,
+    isPeakHour: false,
     total,
     zone: zoneInfo ? { id: zoneInfo.id, name: zoneInfo.name } : null,
   };

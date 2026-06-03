@@ -1,7 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
-import { bogotaTime, isWithinRange } from '@/lib/pricing';
 import { serializeOrder } from '@/lib/serializers';
 
 export const runtime = 'nodejs';
@@ -171,15 +170,12 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // 2. Verificar zona + settings y calcular delivery
-  const [{ data: zone, error: zErr }, { data: settings, error: setErr }] = await Promise.all([
-    sb.from('zones').select('id, name, tarifa, recargo, lat, lng').eq('id', parsed.zoneId).single(),
-    sb
-      .from('settings')
-      .select('peak_start, peak_end, base_delivery_fee')
-      .eq('id', 1)
-      .single(),
-  ]);
+  // 2. Verificar zona y calcular delivery (hora pico eliminada: delivery = zone.tarifa)
+  const { data: zone, error: zErr } = await sb
+    .from('zones')
+    .select('id, name, tarifa, lat, lng')
+    .eq('id', parsed.zoneId)
+    .single();
 
   if (zErr || !zone) {
     return Response.json(
@@ -187,12 +183,8 @@ export async function POST(request: NextRequest) {
       { status: 400 },
     );
   }
-  if (setErr || !settings) {
-    return Response.json({ ok: false, error: 'Settings no inicializado' }, { status: 500 });
-  }
 
-  const isPeak = isWithinRange(bogotaTime(), settings.peak_start, settings.peak_end);
-  const delivery = zone.tarifa + (isPeak ? zone.recargo : 0);
+  const delivery = zone.tarifa;
   const total = subtotal + delivery;
 
   // 3. Upsert customer por phone (phone es UNIQUE)
@@ -260,7 +252,7 @@ export async function POST(request: NextRequest) {
     orderNumber: order.order_number,
     subtotal,
     delivery,
-    peakSurcharge: isPeak ? zone.recargo : 0,
+    peakSurcharge: 0,
     total,
     paymentLink,
   });

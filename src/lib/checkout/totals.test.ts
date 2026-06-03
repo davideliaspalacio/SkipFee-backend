@@ -43,17 +43,17 @@ describe('computeOrderTotals', () => {
     ]);
   });
 
-  it('aplica recargo de hora pico (zone.recargo) cuando now está en el rango', () => {
+  it('hora pico ELIMINADA: domicilio = zone.tarifa siempre, sin recargo', () => {
     const r = computeOrderTotals({
       items: [{ productId: 'p01', qty: 1 }],
       products: PRODUCTS,
       zone: ZONE,
       settings: SETTINGS,
-      now: PEAK,
+      now: PEAK, // antes caía en hora pico; ahora no cambia nada
     });
-    expect(r.peakSurcharge).toBe(1500);
-    expect(r.delivery).toBe(4500 + 1500);
-    expect(r.total).toBe(28000 + 4500 + 1500);
+    expect(r.peakSurcharge).toBe(0);
+    expect(r.delivery).toBe(4500);
+    expect(r.total).toBe(28000 + 4500);
   });
 
   it('reporta productos no disponibles en unavailable[] (por nombre)', () => {
