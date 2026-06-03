@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
 import { classifyOrder } from '@/lib/checkout/shape';
 import { computeOrderTotals, type TotalsProduct, type TotalsZone } from '@/lib/checkout/totals';
+import type { PromotionRow } from '@/lib/checkout/promotions';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -74,10 +75,14 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     );
   }
 
-  // Catálogo + zona + settings para recalcular.
-  const [{ data: products }, { data: settings }] = await Promise.all([
+  // Catálogo + zona + settings + promos activas (todos en paralelo).
+  // Las promos las filtra `computeOrderTotals` por aplicabilidad real.
+  const [{ data: products }, { data: settings }, { data: promotions }] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available'),
     sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
+    sb.from('promotions')
+      .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
+      .eq('active', true),
   ]);
 
   if (!settings) {
@@ -104,6 +109,7 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     zone,
     settings,
     now: new Date(),
+    promotions: (promotions ?? []) as PromotionRow[],
   });
 
   if (totals.missing.length > 0) {
@@ -139,7 +145,15 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
   const lat = parsed.delivery?.lat ?? zone?.lat ?? null;
   const lng = parsed.delivery?.lng ?? zone?.lng ?? null;
 
-  const update: Record<string, unknown> = { total: totals.total };
+  // `total` ya incluye el descuento (computeOrderTotals lo restó). Persistimos
+  // también `discount` y `promo_id` para que el GET checkout pueda devolver el
+  // mismo desglose y para auditoría/reportes. Si no aplicó ninguna promo,
+  // promo_id queda en null y discount en 0.
+  const update: Record<string, unknown> = {
+    total: totals.total,
+    discount: totals.discount,
+    promo_id: totals.appliedPromo?.id ?? null,
+  };
   if (parsed.delivery) {
     if (parsed.delivery.address !== undefined) update.address = parsed.delivery.address;
     if (zoneId) update.zone_id = zoneId;
@@ -167,9 +181,11 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     cart: {
       items: totals.items,
       subtotal: totals.subtotal,
+      discount: totals.discount,
       delivery: totals.delivery,
       peakSurcharge: totals.peakSurcharge,
       total: totals.total,
+      appliedPromo: totals.appliedPromo,
     },
     delivery: deliveryOut,
   });
