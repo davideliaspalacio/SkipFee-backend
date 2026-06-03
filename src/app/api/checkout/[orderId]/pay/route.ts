@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
 import { classifyOrder } from '@/lib/checkout/shape';
 import { generateIntegritySignature } from '@/lib/wompi/signature';
+import { loadOpenState } from '@/lib/hours';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -77,6 +78,21 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
   if (status !== 'valida' || !order) {
     const reported = status === 'ya_usada' ? 'ya_usada' : 'expirada';
     return jsonWithCors({ ok: false, status: reported, error: 'El carrito ya no es editable' }, 409);
+  }
+
+  // Gate por horario / pausa: un link viejo no se puede pagar fuera de horario.
+  const openState = await loadOpenState(sb);
+  if (!openState.open) {
+    return jsonWithCors(
+      {
+        ok: false,
+        status: 'cerrado',
+        error: 'Estamos cerrados en este momento',
+        opensLabel: openState.opensLabel,
+        paused: openState.paused,
+      },
+      409,
+    );
   }
 
   // Completitud para pagar.

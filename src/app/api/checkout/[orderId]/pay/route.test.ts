@@ -141,6 +141,24 @@ describe('POST /api/checkout/:orderId/pay', () => {
     expect((await res.json()).status).toBe('ya_usada');
   });
 
+  it('cerrado por horario ⇒ 409 status cerrado, no paga', async () => {
+    const allClosed = Object.fromEntries(
+      ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map(d => [d, { closed: true }]),
+    );
+    supabaseStub = makeSupabaseStub({
+      ...tablesFor(completeOrder()),
+      settings: { single: { hours: allClosed, orders_paused: false } },
+    });
+    const res = await POST(
+      jsonRequest(URL, 'POST', { customer: { name: 'Ana' } }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.status).toBe('cerrado');
+    expect(orderUpdateCapture).not.toHaveBeenCalled();
+  });
+
   it('OPTIONS responde 204', async () => {
     const res = await OPTIONS();
     expect(res.status).toBe(204);

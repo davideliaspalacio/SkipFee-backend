@@ -331,3 +331,30 @@ describe('routeFlow — keywords globales', () => {
     expect(next.delivery?.address).toBeUndefined();
   });
 });
+
+describe('iniciarPedido — gate por horario / pausa', () => {
+  const allClosed = Object.fromEntries(
+    ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'].map(d => [d, { closed: true }]),
+  );
+
+  it('cerrado por horario ⇒ avisa y NO inicia el pedido', async () => {
+    supabaseStub = makeSupabaseStub({
+      settings: { single: { hours: allClosed, orders_paused: false } },
+      customers: { single: null },
+    });
+    const next = await iniciarPedido(ctxOf({ buttonReplyId: 'menu_pedir' }));
+    expect(next.step).toBe('menu');
+    expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('cerrados'));
+    // No arranca el registro
+    expect(sendTextMock).not.toHaveBeenCalledWith('573136913188', expect.stringContaining('nombre completo'));
+  });
+
+  it('pausado manualmente ⇒ avisa la pausa', async () => {
+    supabaseStub = makeSupabaseStub({
+      settings: { single: { hours: allClosed, orders_paused: true } },
+    });
+    const next = await iniciarPedido(ctxOf({ buttonReplyId: 'menu_pedir' }));
+    expect(next.step).toBe('menu');
+    expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('Pausamos'));
+  });
+});

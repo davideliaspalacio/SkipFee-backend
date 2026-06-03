@@ -4,6 +4,7 @@ import { sendButtons, sendCtaUrl, sendList } from '@/lib/kapso/interactive';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render, type RenderVars } from '@/lib/bot/messages/render';
+import { loadOpenState } from '@/lib/hours';
 import type { ButtonDef } from '@/lib/bot/messages/defaults';
 import type { FlowState, FlowCustomer, FlowDelivery } from './state';
 import { emptyFlowState } from './state';
@@ -162,6 +163,17 @@ export async function handleMenu(ctx: HandlerContext): Promise<FlowState> {
  * - Nuevo o con datos incompletos → registro_intro (full flow)
  */
 export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
+  // Gate por horario / pausa manual: no se inician pedidos fuera de horario.
+  const openState = await loadOpenState(supabaseAdmin());
+  if (!openState.open) {
+    if (openState.paused) {
+      await sendCatalogText(ctx.phone, 'cerrado.pausa');
+    } else {
+      await sendCatalogText(ctx.phone, 'cerrado.aviso', { apertura: openState.opensLabel ?? 'pronto' });
+    }
+    return { ...ctx.state, step: 'menu' };
+  }
+
   const { data: customer } = await supabaseAdmin()
     .from('customers')
     .select('id, name, email, addr, zone_id')

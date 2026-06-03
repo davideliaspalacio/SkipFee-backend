@@ -426,6 +426,26 @@ const DEFS: MessageDef[] = [
     variables: [],
     default: { body: 'Tuvimos un problema procesando tu mensaje. Te paso con uno de mis compas humanos 🙏' },
   }),
+  def({
+    key: 'cerrado.aviso',
+    category: 'conversacion',
+    step: null,
+    kind: 'text',
+    label: 'Aviso: cerrado (fuera de horario)',
+    description: 'Se envía cuando el cliente intenta pedir fuera del horario de operación. {{apertura}} = próxima apertura (ej. "mañana a las 11:00 a. m.").',
+    variables: ['apertura'],
+    default: { body: 'Por ahora estamos cerrados 😴 Abrimos {{apertura}}. Apenas abramos escribime *pedir* y te tomo el pedido 🥪' },
+  }),
+  def({
+    key: 'cerrado.pausa',
+    category: 'conversacion',
+    step: null,
+    kind: 'text',
+    label: 'Aviso: pedidos pausados',
+    description: 'Se envía cuando los pedidos están pausados manualmente (cocina saturada, etc.), aunque sea horario de atención.',
+    variables: [],
+    default: { body: 'Uy, estamos a tope de pedidos en este momento 🙏 Pausamos los pedidos un ratico. Probá de nuevo en un rato y con gusto te atiendo 🥪' },
+  }),
 
   // ----- Recordatorios de inactividad (cron) -----
   def({

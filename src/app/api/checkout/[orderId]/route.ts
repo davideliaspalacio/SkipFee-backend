@@ -3,6 +3,7 @@ import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
 import { buildCatalog, classifyOrder, emptyCart } from '@/lib/checkout/shape';
 import { computeOrderTotals, type TotalsProduct, type TotalsZone } from '@/lib/checkout/totals';
+import { loadOpenState } from '@/lib/hours';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -83,10 +84,11 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   }
 
   // Catálogo + zonas + settings (para recalcular el carrito y embeber catálogo).
-  const [{ data: products }, { data: zones }, { data: settings }] = await Promise.all([
+  const [{ data: products }, { data: zones }, { data: settings }, openState] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').order('name'),
     sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
+    loadOpenState(sb),
   ]);
 
   // `img` y `description` los agregamos al SELECT para embeberlos en el
@@ -161,6 +163,9 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
       })),
     ),
     zones: zoneList.map(z => ({ id: z.id, name: z.name ?? '', tarifa: z.tarifa, recargo: z.recargo })),
+    // Estado de operación: la tienda muestra "cerrado" y bloquea el pago si está cerrado.
+    businessOpen: openState.open,
+    opensLabel: openState.opensLabel,
   });
 }
 

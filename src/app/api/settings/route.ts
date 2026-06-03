@@ -34,20 +34,35 @@ export async function GET() {
       peakSurcharge: data.peak_surcharge,
       baseDeliveryFee: data.base_delivery_fee,
       reminderMinutes: data.reminder_minutes,
+      hours: data.hours ?? null,
+      ordersPaused: data.orders_paused ?? false,
       updatedAt: data.updated_at,
     },
   });
 }
 
+const HHMM = /^\d{2}:\d{2}$/;
+const dayHoursSchema = z.object({
+  closed: z.boolean().optional(),
+  open: z.string().regex(HHMM).optional(),
+  close: z.string().regex(HHMM).optional(),
+});
+const hoursSchema = z.record(
+  z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']),
+  dayHoursSchema,
+);
+
 const patchSchema = z.object({
-  openHour: z.string().regex(/^\d{2}:\d{2}$/).optional(),
-  closeHour: z.string().regex(/^\d{2}:\d{2}$/).optional(),
+  openHour: z.string().regex(HHMM).optional(),
+  closeHour: z.string().regex(HHMM).optional(),
   openDays: z.array(z.string()).optional(),
-  peakStart: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
-  peakEnd: z.string().regex(/^\d{2}:\d{2}$/).nullable().optional(),
+  peakStart: z.string().regex(HHMM).nullable().optional(),
+  peakEnd: z.string().regex(HHMM).nullable().optional(),
   peakSurcharge: z.number().int().nonnegative().optional(),
   baseDeliveryFee: z.number().int().nonnegative().optional(),
   reminderMinutes: z.number().int().positive().optional(),
+  hours: hoursSchema.optional(),
+  ordersPaused: z.boolean().optional(),
 });
 
 export async function PATCH(request: NextRequest) {
@@ -71,6 +86,8 @@ export async function PATCH(request: NextRequest) {
   if (body.peakSurcharge !== undefined) update.peak_surcharge = body.peakSurcharge;
   if (body.baseDeliveryFee !== undefined) update.base_delivery_fee = body.baseDeliveryFee;
   if (body.reminderMinutes !== undefined) update.reminder_minutes = body.reminderMinutes;
+  if (body.hours !== undefined) update.hours = body.hours;
+  if (body.ordersPaused !== undefined) update.orders_paused = body.ordersPaused;
 
   if (Object.keys(update).length === 0) {
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });
