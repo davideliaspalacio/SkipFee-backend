@@ -11,6 +11,13 @@ vi.mock('@/lib/kapso/client', () => ({
 vi.mock('@/lib/messaging', () => ({
   recordMessage: (...args: unknown[]) => recordMessageMock(...args),
 }));
+// El catálogo de mensajes lee de bot_messages vía supabaseAdmin; sin overrides
+// (data: []) cae a los textos por defecto. Determinístico, sin tocar red.
+vi.mock('@/lib/db', () => ({
+  supabaseAdmin: () => ({
+    from: () => ({ select: () => Promise.resolve({ data: [], error: null }) }),
+  }),
+}));
 
 const updateCapture = vi.fn();
 

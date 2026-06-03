@@ -3,6 +3,8 @@ import { supabaseAdmin } from '@/lib/db';
 import { sendText } from '@/lib/kapso/client';
 import { recordMessage } from '@/lib/messaging';
 import { env } from '@/lib/env';
+import { getMessage } from '@/lib/bot/messages/catalog';
+import { render } from '@/lib/bot/messages/render';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,24 +28,9 @@ export const dynamic = 'force-dynamic';
 const NUDGE_AFTER_MIN = 5;
 const RESET_AFTER_MIN = 30;
 
-const NUDGES: Record<string, string> = {
-  consentimiento: '¿Seguís ahí parce? Te quedó pendiente aceptar la política para que sigamos 🙏',
-  menu_principal: '¿Seguís ahí? Tocá una opción del menú cuando quieras seguir con tu pedido 🥪',
-  menu_recurrente: '¿Seguís ahí? Tocá una opción cuando quieras hacer el pedido 🥪',
-  registro_nombre: '¿Seguís ahí? Cuando puedas, mandame tu nombre completo para arrancar tu pedido.',
-  registro_email: '¿Seguís ahí? Falta tu correo para terminar el registro.',
-  registro_confirmar: '¿Confirmás tus datos? Tocá "Sí, están bien" o "Editar".',
-  ubicacion: '¿Seguís ahí? Decime en qué zona vas a recibir el pedido (lista del último mensaje).',
-  direccion_texto: '¿Seguís ahí? Mandame la dirección completa para terminar tu pedido.',
-  direccion_confirmar: '¿Confirmás la dirección? Tocá uno de los botones del último mensaje.',
-  carta: '¿Seguís viendo la carta? Tocá un producto cuando quieras seguir.',
-  cantidad: '¿Cuántos vas a querer? Botones 1, 2 o 3+ del último mensaje.',
-  cantidad_custom: '¿Cuántos vas a querer? Mandame el número (entre 3 y 20).',
-  algo_mas: '¿Seguís ahí? Tocá una opción del último mensaje para agregar más o cerrar el pedido.',
-  resumen: '¿Confirmás el pedido? Tocá Confirmar, Editar o Cancelar.',
-  resumen_editar: '¿Seguís editando el carrito? Tocá un item para quitarlo o "Listo" para volver al resumen.',
-  pago: 'Te dejé el link de pago de Wompi. Cuando lo completes te confirmo y pasa a cocina 🥪',
-};
+// Los recordatorios por step son editables desde la UI (`nudge.*`). Ver
+// `@/lib/bot/messages/defaults`. Antes vivían acá hardcodeados y con llaves
+// del flujo viejo (carta/cantidad/pago…) que ya no matcheaban los steps.
 
 interface ChatRow {
   id: string;
@@ -106,7 +93,11 @@ export async function POST(request: NextRequest) {
     // ¿Ya le mandamos nudge esta ronda? (evita re-recordarle cada minuto)
     if (chat.flow_state?.reminderSentAt) continue;
 
-    const nudgeBody = NUDGES[step] ?? '¿Seguís ahí? Tocá una opción del último mensaje para seguir 🥪';
+    // Recordatorio editable por step; cae a `nudge.default` si no hay uno propio.
+    let nudge = await getMessage(`nudge.${step}`);
+    if (!nudge.body) nudge = await getMessage('nudge.default');
+    if (!nudge.enabled) continue; // recordatorio apagado desde la UI
+    const nudgeBody = render(nudge.body);
 
     try {
       const result = await sendText(chat.phone, nudgeBody);

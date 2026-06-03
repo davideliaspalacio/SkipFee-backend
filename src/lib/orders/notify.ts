@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendText } from '@/lib/kapso/client';
 import { recordMessage } from '@/lib/messaging';
+import { getMessage } from '@/lib/bot/messages/catalog';
+import { render } from '@/lib/bot/messages/render';
 
 /**
  * Notificación de seguimiento por cambio de estado del pedido (post-pago).
@@ -34,19 +36,14 @@ function firstNameOf(order: NotifyOrder): string {
   return (c?.name ?? '').split(' ')[0] || '';
 }
 
-/** Mensaje por estado (español paisa). `firstName` puede venir vacío. */
-function messageFor(status: NotifiableStatus, firstName: string): string {
-  const hola = firstName ? `Hola ${firstName}` : 'Hola';
-  switch (status) {
-    case 'pagado':
-      return `¡${firstName ? firstName + ', ' : ''}pago recibido! 🎉 Tu pedido ya pasa a cocina 🥪`;
-    case 'cocina':
-      return `${hola}, ¡manos a la obra! 👨‍🍳 Tu pedido está en preparación.`;
-    case 'ruta':
-      return `${hola}, tu pedido va en camino 🛵`;
-    case 'entregado':
-      return `${hola}, ¡tu pedido fue entregado! 🙌 Gracias por pedir en Bros and Subs.`;
-  }
+/**
+ * Mensaje por estado, editable desde la UI (`notif.*`). `firstName` puede venir
+ * vacío. `{{saludo}}` = "Hola {nombre}" o "Hola" si no hay nombre.
+ */
+async function messageFor(status: NotifiableStatus, firstName: string): Promise<string> {
+  const saludo = firstName ? `Hola ${firstName}` : 'Hola';
+  const m = await getMessage(`notif.${status}`);
+  return render(m.body, { saludo, nombre: firstName });
 }
 
 export interface NotifyResult {
@@ -73,7 +70,7 @@ export async function notifyOrderStatus(opts: {
   const already = order.notified_statuses ?? [];
   if (already.includes(newStatus)) return { sent: false, skipped: 'already-notified' };
 
-  const body = messageFor(newStatus, firstNameOf(order));
+  const body = await messageFor(newStatus, firstNameOf(order));
 
   try {
     const result = await sendText(order.phone, body);
