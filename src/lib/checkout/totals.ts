@@ -122,16 +122,20 @@ export function computeOrderTotals(input: {
 
   let delivery = 0;
   let peakSurcharge = 0;
-  if (hasItems) {
-    if (zone) {
-      peakSurcharge = isPeak ? zone.recargo : 0;
-      delivery = zone.tarifa + peakSurcharge;
-    } else {
-      // Sin zona conocida: tarifa base, sin recargo de hora pico.
-      delivery = settings.base_delivery_fee;
-      peakSurcharge = 0;
-    }
+  if (hasItems && zone) {
+    // El precio del domicilio SIEMPRE sale de la zona seleccionada (la que
+    // el bot capturó). No usamos `settings.base_delivery_fee` como fallback
+    // porque mostrar un precio inventado y luego cambiarlo a `zone.tarifa`
+    // cuando llega la dirección confunde al cliente (se ve $4.500 y después
+    // $5.000 sin razón aparente).
+    //
+    // Si no hay zona conocida ⇒ delivery = 0 y el storefront NO muestra la
+    // línea hasta que el bot/cliente complete la entrega.
+    peakSurcharge = isPeak ? zone.recargo : 0;
+    delivery = zone.tarifa + peakSurcharge;
   }
+  // Nota: `settings.base_delivery_fee` queda exclusivamente para la
+  // pre-cotización del bot (/api/quotes) cuando el cliente aún no eligió zona.
 
   // Resolvemos la mejor promo automática y la descontamos SOLO del subtotal
   // (nunca del delivery — regla de negocio). El cálculo es:

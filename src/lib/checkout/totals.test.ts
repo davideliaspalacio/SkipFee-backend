@@ -78,7 +78,10 @@ describe('computeOrderTotals', () => {
     expect(r.missing).toEqual(['nope']);
   });
 
-  it('sin zona: delivery usa base_delivery_fee de settings y no hay recargo', () => {
+  it('sin zona: delivery = 0 (no inventamos precio sin saber dónde entregar)', () => {
+    // Caso: el cliente abre el carrito antes de que el bot haya capturado la
+    // dirección. Mostrar `settings.base_delivery_fee` como fallback genera
+    // un cambio visual cuando llega la zona real ($4.500 → $5.000) y confunde.
     const r = computeOrderTotals({
       items: [{ productId: 'p01', qty: 1 }],
       products: PRODUCTS,
@@ -86,9 +89,9 @@ describe('computeOrderTotals', () => {
       settings: SETTINGS,
       now: PEAK,
     });
-    expect(r.delivery).toBe(4500);
+    expect(r.delivery).toBe(0);
     expect(r.peakSurcharge).toBe(0);
-    expect(r.total).toBe(28000 + 4500);
+    expect(r.total).toBe(28000);
   });
 
   it('carrito vacío: totales en 0, delivery 0', () => {
