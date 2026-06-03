@@ -60,9 +60,11 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
 
   const { data: order } = (await sb
     .from('orders')
-    .select('id, status, expires_at')
+    .select('id, status, expires_at, zone_id')
     .eq('id', orderId)
-    .single()) as { data: { id: string; status: string; expires_at: string | null } | null };
+    .single()) as {
+    data: { id: string; status: string; expires_at: string | null; zone_id: string | null } | null;
+  };
 
   const status = classifyOrder(order, new Date());
   if (status !== 'valida' || !order) {
@@ -89,7 +91,10 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     return jsonWithCors({ ok: false, error: 'Settings no inicializado' }, 500);
   }
 
-  const zoneId = parsed.delivery?.zoneId ?? null;
+  // La entrega la captura el bot y es read-only en la tienda: cuando el cliente
+  // solo edita items, el body NO trae zoneId. Caemos a la zona guardada en la
+  // orden para que el domicilio (zone.tarifa) SIEMPRE se cobre y nunca quede en 0.
+  const zoneId = parsed.delivery?.zoneId ?? order.zone_id;
   let zone: (TotalsZone & { color?: string }) | null = null;
   if (zoneId) {
     const { data: z } = (await sb

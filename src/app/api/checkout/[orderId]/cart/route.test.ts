@@ -52,7 +52,12 @@ beforeEach(() => {
 });
 
 function validBorrador() {
-  return { id: 'o1', status: 'borrador', expires_at: new Date(Date.now() + 3600_000).toISOString() };
+  return {
+    id: 'o1',
+    status: 'borrador',
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    zone_id: 'poblado', // la zona la dejó el bot en la orden
+  };
 }
 
 describe('PUT /api/checkout/:orderId/cart', () => {
@@ -90,6 +95,20 @@ describe('PUT /api/checkout/:orderId/cart', () => {
     expect(updPayload.zone_id).toBe('poblado');
     expect(updPayload.total).toBe(65000);
     expect(updPayload.status).toBeUndefined(); // sigue borrador, no se toca status
+  });
+
+  it('editar SOLO items (sin delivery) usa la zona guardada ⇒ el domicilio NO queda en 0', async () => {
+    // Regresión: la entrega es read-only (la pone el bot). Al cambiar items el
+    // body no trae zoneId; debe caer a order.zone_id y cobrar zone.tarifa.
+    supabaseStub = makeSupabaseStub(tablesFor(validBorrador()));
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }] }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.cart.delivery).toBe(4500); // tarifa de la zona guardada, no 0
+    expect(body.cart.total).toBe(28000 + 4500);
   });
 
   it('delivery sin lat/lng usa las coords de la zona como fallback al persistir', async () => {
