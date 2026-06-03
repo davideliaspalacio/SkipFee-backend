@@ -86,9 +86,12 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
       sendButtons({
         to: ctx.phone,
         body: `${saludo}\n¿Hacemos un pedido?`,
+        // Antes había también "🙋 Hablar humano" — lo quitamos para que el
+        // primer touch sea exclusivamente comercial. Si un cliente igual
+        // necesita atención humana puede escribirlo y `manejarTextoLibre`
+        // lo escala vía `escalarHumano`.
         buttons: [
           { id: 'menu_pedir', title: '🥪 Hacer pedido' },
-          { id: 'menu_humano', title: '🙋 Hablar humano' },
         ],
       }),
   });
@@ -103,12 +106,15 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
 export async function handleMenu(ctx: HandlerContext): Promise<FlowState> {
   const choice = ctx.incoming.buttonReplyId;
   if (choice === 'menu_pedir') return iniciarPedido(ctx);
+  // `menu_humano` ya no se envía como botón en el saludo, pero seguimos
+  // respetándolo por compat: si un cliente tiene el mensaje viejo en cache
+  // de WhatsApp y aprieta, igual lo escalamos.
   if (choice === 'menu_humano') return escalarHumano(ctx, 'cliente pidió humano desde el menú');
 
   return manejarTextoLibre({
     ctx,
-    stepDescription: 'menú inicial del bot: el cliente decide si hacer un pedido o hablar con un humano',
-    lastBotPrompt: '¿Hacemos un pedido? (botones: Hacer pedido / Hablar humano)',
+    stepDescription: 'menú inicial del bot: el cliente decide si hacer un pedido',
+    lastBotPrompt: '¿Hacemos un pedido? (botón: Hacer pedido)',
     reprompt: () => reenviarMenu(ctx),
   });
 }
@@ -625,9 +631,10 @@ async function reenviarMenu(ctx: HandlerContext): Promise<FlowState> {
       sendButtons({
         to: ctx.phone,
         body: '¿Hacemos un pedido?',
+        // En sync con el menú inicial: solo "Hacer pedido". Ver comentario
+        // en `mostrarMenuInicial`.
         buttons: [
           { id: 'menu_pedir', title: '🥪 Hacer pedido' },
-          { id: 'menu_humano', title: '🙋 Hablar humano' },
         ],
       }),
   });
