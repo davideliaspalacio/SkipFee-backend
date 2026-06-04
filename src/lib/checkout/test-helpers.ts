@@ -78,6 +78,12 @@ export function makeSupabaseStub(config: SupabaseStubConfig) {
       filters[`${col}__in`] = vals;
       return chain();
     };
+    builder.or = (expr: string) => {
+      // El stub no evalúa expresiones OR de PostgREST: solo guarda lo recibido
+      // por si un test quiere assert sobre el shape. No filtra rows.
+      filters['__or'] = expr;
+      return chain();
+    };
 
     builder.insert = (payload: unknown) => {
       mode = 'insert';
@@ -176,6 +182,8 @@ function applyFilter(rows: unknown[], filters: Record<string, unknown>): unknown
         if (!(val as unknown[]).includes(r[col])) return false;
       } else if (key.endsWith('__gte') || key.endsWith('__lt')) {
         // ignorado para el filtrado de listas en estos tests
+        continue;
+      } else if (key === '__or') {
         continue;
       } else {
         if (r[key] !== val) return false;
