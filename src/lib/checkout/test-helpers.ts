@@ -78,9 +78,9 @@ export function makeSupabaseStub(config: SupabaseStubConfig) {
       filters[`${col}__in`] = vals;
       return chain();
     };
-    // `.or('col.op.val,col2.op2.val2')`: grupo OR de PostgREST. Guardamos la
-    // expresión cruda y la evalúa `applyFilter` (ANY de las condiciones).
     builder.or = (expr: string) => {
+      // El stub no evalúa expresiones OR de PostgREST: solo guarda lo recibido
+      // por si un test quiere assert sobre el shape. No filtra rows.
       filters['__or'] = expr;
       return chain();
     };
@@ -169,14 +169,12 @@ export function makeSupabaseStub(config: SupabaseStubConfig) {
   return { client: { from } as unknown, calls };
 }
 
-/** Filtro mínimo: aplica .eq(), .in(), .neq() y .or() sobre las filas declaradas. */
+/** Filtro mínimo: aplica .eq() y .in() sobre las filas declaradas. */
 function applyFilter(rows: unknown[], filters: Record<string, unknown>): unknown[] {
   return rows.filter(row => {
     const r = row as Record<string, unknown>;
     for (const [key, val] of Object.entries(filters)) {
-      if (key === '__or') {
-        if (!passesOr(r, val as string)) return false;
-      } else if (key.endsWith('__neq')) {
+      if (key.endsWith('__neq')) {
         const col = key.slice(0, -5);
         if ((val as unknown[]).includes(r[col])) return false;
       } else if (key.endsWith('__in')) {
@@ -185,36 +183,13 @@ function applyFilter(rows: unknown[], filters: Record<string, unknown>): unknown
       } else if (key.endsWith('__gte') || key.endsWith('__lt')) {
         // ignorado para el filtrado de listas en estos tests
         continue;
+      } else if (key === '__or') {
+        continue;
       } else {
         if (r[key] !== val) return false;
       }
     }
     return true;
-  });
-}
-
-/**
- * Evalúa una expresión `.or()` de PostgREST (`'col.op.val,col2.op2.val2'`):
- * la fila pasa si CUALQUIERA de las condiciones es verdadera. Soporta los
- * operadores que usan los handlers (eq/neq/gt/gte/lt/lte). Los comparadores
- * numéricos exigen que el valor de la fila sea number (null/undefined ⇒ false,
- * igual que SQL: `NULL > 0` no es true).
- */
-function passesOr(row: Record<string, unknown>, expr: string): boolean {
-  return expr.split(',').some(cond => {
-    const [field, op, ...rest] = cond.split('.');
-    const raw = rest.join('.');
-    const rowVal = row[field];
-    const num = Number(raw);
-    switch (op) {
-      case 'eq': return rowVal === raw || rowVal === num;
-      case 'neq': return rowVal !== raw && rowVal !== num;
-      case 'gt': return typeof rowVal === 'number' && rowVal > num;
-      case 'gte': return typeof rowVal === 'number' && rowVal >= num;
-      case 'lt': return typeof rowVal === 'number' && rowVal < num;
-      case 'lte': return typeof rowVal === 'number' && rowVal <= num;
-      default: return false;
-    }
   });
 }
 

@@ -36,6 +36,7 @@ export async function GET() {
       reminderMinutes: data.reminder_minutes,
       hours: data.hours ?? null,
       ordersPaused: data.orders_paused ?? false,
+      deliveredWindowHours: data.delivered_window_hours ?? 8,
       updatedAt: data.updated_at,
     },
   });
@@ -63,6 +64,7 @@ const patchSchema = z.object({
   reminderMinutes: z.number().int().positive().optional(),
   hours: hoursSchema.optional(),
   ordersPaused: z.boolean().optional(),
+  deliveredWindowHours: z.number().int().min(1).max(72).optional(),
 });
 
 export async function PATCH(request: NextRequest) {
@@ -88,6 +90,7 @@ export async function PATCH(request: NextRequest) {
   if (body.reminderMinutes !== undefined) update.reminder_minutes = body.reminderMinutes;
   if (body.hours !== undefined) update.hours = body.hours;
   if (body.ordersPaused !== undefined) update.orders_paused = body.ordersPaused;
+  if (body.deliveredWindowHours !== undefined) update.delivered_window_hours = body.deliveredWindowHours;
 
   if (Object.keys(update).length === 0) {
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });

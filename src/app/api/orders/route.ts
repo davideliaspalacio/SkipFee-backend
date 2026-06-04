@@ -18,6 +18,8 @@ const ORDER_SELECT = `
  * Devuelve pedidos serializados con la forma del frontend (cliente nombre,
  * zone string, items texto, etc.). Lo consume el panel admin (kanban).
  */
+const DEFAULT_DELIVERED_WINDOW_HOURS = 8;
+
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
   const status = url.searchParams.get('status');
@@ -25,20 +27,44 @@ export async function GET(request: NextRequest) {
   const limitParam = url.searchParams.get('limit');
   const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 200, 500) : 200;
 
+  const sb = supabaseAdmin();
+
+  // Ventana rodante para "entregado": evita que el límite global se llene de
+  // entregados viejos (los empujarían afuera). Configurable desde settings,
+  // con fallback a 8 h por si la lectura falla.
+  const { data: settingsRow } = await sb
+    .from('settings')
+    .select('delivered_window_hours')
+    .eq('id', 1)
+    .single();
+  const windowHours: number =
+    typeof settingsRow?.delivered_window_hours === 'number'
+      ? settingsRow.delivered_window_hours
+      : DEFAULT_DELIVERED_WINDOW_HOURS;
+  const cutoffIso = new Date(Date.now() - windowHours * 60 * 60 * 1000).toISOString();
+
   // El kanban admin muestra los pedidos reales + los carritos del checkout web
-  // que YA tienen carrito armado (borrador con total > 0): aparecen en la columna
-  // "Nuevo" marcados como "Sin pagar". Excluimos los borradores vacíos (todavía
-  // sin items → total NULL) y los `expirado` (borradores vencidos sin pagar).
-  let query = supabaseAdmin()
+  // que YA tienen carrito armado: aparecen en la columna "Nuevo" marcados como
+  // "Sin pagar". Excluimos los `expirado`; los borradores vacíos (todavía sin
+  // items) se filtran abajo, tras la query.
+  let query = sb
     .from('orders')
     .select(ORDER_SELECT)
     .neq('status', 'expirado')
-    .or('status.neq.borrador,total.gt.0')
     .order('created_at', { ascending: false })
     .limit(limit);
 
-  if (status) query = query.eq('status', status);
   if (zoneId) query = query.eq('zone_id', zoneId);
+
+  if (status === 'entregado') {
+    query = query.eq('status', status).gte('created_at', cutoffIso);
+  } else if (status) {
+    query = query.eq('status', status);
+  } else {
+    // Sin filtro: la cláusula or() dice "NO es entregado, O bien es entregado
+    // pero cae dentro de la ventana". Las otras columnas no se ven afectadas.
+    query = query.or(`status.neq.entregado,created_at.gte.${cutoffIso}`);
+  }
 
   const { data, error } = await query;
   if (error) {
@@ -46,7 +72,12 @@ export async function GET(request: NextRequest) {
     return Response.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  const orders = (data ?? []).map(serializeOrder);
+  // Ocultamos los borradores SIN carrito (total NULL/0): son sesiones de checkout
+  // recién creadas que el cliente aún no llenó. Los borradores con carrito
+  // (total > 0) sí se muestran como "Sin pagar" en la columna "Nuevo".
+  const orders = (data ?? [])
+    .filter(row => row.status !== 'borrador' || row.total > 0)
+    .map(serializeOrder);
   return Response.json({ ok: true, orders });
 }
 
