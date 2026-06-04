@@ -43,6 +43,12 @@ export function serializeOrder(row: OrderRow) {
     Math.floor((Date.now() - new Date(row.created_at).getTime()) / 60000),
   );
 
+  // Pedidos sin pagar (borrador con carrito armado, o pago iniciado) se muestran
+  // en la columna "Nuevo" del kanban con un distintivo "Sin pagar", para darles
+  // visibilidad antes del pago sin que cocina los procese por error. Los estados
+  // post-pago conservan su status real.
+  const unpaid = row.status === 'borrador' || row.status === 'pendiente_pago';
+
   return {
     id: row.id,
     number: row.order_number,
@@ -52,7 +58,8 @@ export function serializeOrder(row: OrderRow) {
     total: row.total,
     zone: zone?.id ?? '',
     zoneName: zone?.name ?? '',
-    status: row.status,
+    status: unpaid ? 'nuevo' : row.status,
+    unpaid,
     minutos,
     address: row.address,
     phone: row.phone,

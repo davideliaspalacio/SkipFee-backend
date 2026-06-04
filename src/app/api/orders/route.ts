@@ -25,13 +25,15 @@ export async function GET(request: NextRequest) {
   const limitParam = url.searchParams.get('limit');
   const limit = limitParam ? Math.min(parseInt(limitParam, 10) || 200, 500) : 200;
 
-  // El kanban admin solo muestra pedidos reales: excluimos los carritos del
-  // checkout web en `borrador` y los `expirado` (borradores vencidos sin pagar).
+  // El kanban admin muestra los pedidos reales + los carritos del checkout web
+  // que YA tienen carrito armado (borrador con total > 0): aparecen en la columna
+  // "Nuevo" marcados como "Sin pagar". Excluimos los borradores vacíos (todavía
+  // sin items → total NULL) y los `expirado` (borradores vencidos sin pagar).
   let query = supabaseAdmin()
     .from('orders')
     .select(ORDER_SELECT)
-    .neq('status', 'borrador')
     .neq('status', 'expirado')
+    .or('status.neq.borrador,total.gt.0')
     .order('created_at', { ascending: false })
     .limit(limit);
 
