@@ -21,8 +21,7 @@ export type FlowStep =
 
   // --- path DIRECCIÓN ---
   | 'direccion_texto'        // pidiendo dirección por texto (→ geocode)
-  | 'direccion_ubicacion'    // geocode dudoso: pidiendo compartir ubicación GPS
-  | 'direccion_zona'         // camino manual (sin geocoding): eligiendo zona de lista
+  | 'direccion_zona'         // selección manual de zona (geocode dudoso o sin polígonos)
   | 'direccion_confirmar'    // resumen dir + zona → Sí y guardar | Cambiar | Sí sin guardar
   | 'direccion_fuera_cobertura' // fuera de zona → humano | cambiar dirección
 

@@ -39,7 +39,6 @@ import {
   handleRegistroEmail,
   handleRegistroConfirmar,
   handleDireccionTexto,
-  handleDireccionUbicacion,
   handleDireccionZona,
   handleDireccionConfirmar,
   handleDireccionFueraCobertura,
@@ -86,7 +85,7 @@ beforeEach(() => {
     locationType: 'ROOFTOP', partialMatch: false, confidence: 'alta',
   });
   geocodingEnabledMock.mockReset().mockReturnValue(true);
-  resolveZoneMock.mockReset().mockResolvedValue('poblado');
+  resolveZoneMock.mockReset().mockResolvedValue({ zoneId: 'poblado', configured: true });
 });
 
 describe('iniciarPedido — decide nuevo vs recurrente', () => {
@@ -212,7 +211,7 @@ describe('Path REGISTRO (cliente nuevo)', () => {
 describe('Path DIRECCIÓN (geocoding + 3 botones)', () => {
   it('geocode confiable + dentro de zona ⇒ direccion_confirmar (botones guardar/cambiar/no guardar)', async () => {
     supabaseStub = makeSupabaseStub({ zones: { single: { name: 'El Poblado', tarifa: 4500 } } });
-    resolveZoneMock.mockResolvedValue('poblado');
+    resolveZoneMock.mockResolvedValue({ zoneId: 'poblado', configured: true });
     const next = await handleDireccionTexto(ctxOf(
       { text: 'Cra 43A #5-15' },
       { step: 'direccion_texto', customer: { name: 'E', email: 'e@e.co' }, delivery: {} },
@@ -227,7 +226,7 @@ describe('Path DIRECCIÓN (geocoding + 3 botones)', () => {
     ]);
   });
 
-  it('geocode con confianza baja ⇒ pide ubicación (direccion_ubicacion)', async () => {
+  it('geocode con confianza baja ⇒ selección manual de zona (lista)', async () => {
     geocodeMock.mockResolvedValue({
       lat: 6.2, lng: -75.5, formatted: 'x', locationType: 'APPROXIMATE', partialMatch: false, confidence: 'baja',
     });
@@ -235,13 +234,13 @@ describe('Path DIRECCIÓN (geocoding + 3 botones)', () => {
       { text: 'por el centro' },
       { step: 'direccion_texto', delivery: {} },
     ));
-    expect(next.step).toBe('direccion_ubicacion');
+    expect(next.step).toBe('direccion_zona');
     expect(next.delivery?.address).toBe('por el centro');
-    expect(sendLocationRequestMock).toHaveBeenCalledTimes(1);
+    expect(sendListMock).toHaveBeenCalledTimes(1);
   });
 
-  it('geocode confiable pero fuera de toda zona ⇒ direccion_fuera_cobertura', async () => {
-    resolveZoneMock.mockResolvedValue(null);
+  it('geocode confiable, fuera de zona y con polígonos dibujados ⇒ direccion_fuera_cobertura', async () => {
+    resolveZoneMock.mockResolvedValue({ zoneId: null, configured: true });
     const next = await handleDireccionTexto(ctxOf(
       { text: 'Bogotá centro' },
       { step: 'direccion_texto', delivery: {} },
@@ -270,25 +269,15 @@ describe('Path DIRECCIÓN (geocoding + 3 botones)', () => {
     expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('más detallada'));
   });
 
-  it('handleDireccionUbicacion con ubicación dentro de zona ⇒ confirmar', async () => {
-    supabaseStub = makeSupabaseStub({ zones: { single: { name: 'El Poblado', tarifa: 4500 } } });
-    resolveZoneMock.mockResolvedValue('poblado');
-    const next = await handleDireccionUbicacion(ctxOf(
-      { location: { lat: 6.21, lng: -75.57 } },
-      { step: 'direccion_ubicacion', delivery: { address: 'Cra 43A' } },
+  it('geocode confiable pero sin polígonos configurados ⇒ selección manual de zona (conserva coords)', async () => {
+    resolveZoneMock.mockResolvedValue({ zoneId: null, configured: false });
+    const next = await handleDireccionTexto(ctxOf(
+      { text: 'Cra 43A #5-15' },
+      { step: 'direccion_texto', delivery: {} },
     ));
-    expect(next.step).toBe('direccion_confirmar');
-    expect(next.delivery?.lat).toBe(6.21);
-    expect(next.delivery?.zoneId).toBe('poblado');
-  });
-
-  it('handleDireccionUbicacion fuera de zona ⇒ fuera_cobertura', async () => {
-    resolveZoneMock.mockResolvedValue(null);
-    const next = await handleDireccionUbicacion(ctxOf(
-      { location: { lat: 4.6, lng: -74.0 } },
-      { step: 'direccion_ubicacion', delivery: { address: 'Bogotá' } },
-    ));
-    expect(next.step).toBe('direccion_fuera_cobertura');
+    expect(next.step).toBe('direccion_zona');
+    expect(sendListMock).toHaveBeenCalledTimes(1);
+    expect(next.delivery?.lat).toBe(6.2); // conserva las coords del geocode
   });
 
   it('handleDireccionZona (manual) ⇒ guarda zona y confirma', async () => {
