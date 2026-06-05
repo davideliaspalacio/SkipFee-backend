@@ -60,6 +60,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .eq('id', id);
   if (updErr) return Response.json({ ok: false, error: updErr.message }, { status: 500 });
 
+  // La reseña quedó verificada: el chat ya no necesita atención humana → vuelve
+  // al bot para que el cliente pueda seguir interactuando (p. ej. pedir de nuevo).
+  await sb.from('chats').update({ status: 'bot' }).eq('id', `wa:${r.phone}`);
+
   // Avisar al cliente (no rompe la respuesta si falla).
   try {
     const m = await getMessage('reward.aprobado');

@@ -49,6 +49,10 @@ export async function POST(request: NextRequest, context: { params: Promise<{ id
     .eq('id', id);
   if (updErr) return Response.json({ ok: false, error: updErr.message }, { status: 500 });
 
+  // Caso cerrado (reseña no verificada): el chat ya no necesita atención humana →
+  // vuelve al bot para que el cliente pueda seguir interactuando.
+  await sb.from('chats').update({ status: 'bot' }).eq('id', `wa:${r.phone}`);
+
   if (body.notify !== false) {
     try {
       const m = await getMessage('reward.rechazado');
