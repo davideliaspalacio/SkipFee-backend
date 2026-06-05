@@ -36,6 +36,11 @@ const schema = z.object({
   // el futuro necesitamos consultar transactions / refunds desde el backend.
   WOMPI_PRIVATE_KEY: z.string().optional(),
 
+  // --- Google Maps (Geocoding server-side · Tarea 2) ---
+  // Opcional para no romper el dev de quien no la configuró. Si falta, el bot
+  // cae al camino manual de zona (no geocodifica). Requiere Geocoding API + billing.
+  GOOGLE_MAPS_API_KEY: z.string().optional(),
+
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });
 

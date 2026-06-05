@@ -5,6 +5,7 @@ import { sendText } from '@/lib/kapso/client';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
+import { redeemRewardForOrder } from '@/lib/orders/rewards';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -159,6 +160,9 @@ export async function POST(request: NextRequest) {
         flow_updated_at: new Date().toISOString(),
       })
       .eq('id', chatId);
+
+    // Post-venta (Tarea 3): canjear cupón de postre vigente en este pedido.
+    await redeemRewardForOrder({ sb, orderId: order.id, phone: order.phone });
   } catch (err) {
     console.error('[wompi webhook] notif error (estado ya actualizado)', err);
   }

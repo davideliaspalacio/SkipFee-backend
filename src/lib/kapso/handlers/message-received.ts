@@ -32,6 +32,15 @@ const payloadSchema = z
             longitude: z.number().optional(),
           })
           .optional(),
+        image: z
+          .object({
+            id: z.string().optional(),
+            link: z.string().optional(),
+            url: z.string().optional(),
+            caption: z.string().optional(),
+            mime_type: z.string().optional(),
+          })
+          .optional(),
         timestamp: z.union([z.string(), z.number()]).optional(),
       })
       .passthrough(),
@@ -73,8 +82,13 @@ export async function handleMessageReceived(payload: unknown): Promise<void> {
       const lng = message.location?.longitude;
       return `📍 ubicación ${lat?.toFixed(5)}, ${lng?.toFixed(5)}`;
     }
+    if (message.type === 'image') return message.image?.caption || '📷 Imagen';
     return `[${message.type ?? 'desconocido'}]`;
   })();
+
+  // URL de media para imágenes entrantes (screenshot de reseña), si Kapso la da.
+  const mediaUrl =
+    message.type === 'image' ? message.image?.link ?? message.image?.url ?? null : null;
 
   // 1. Persistir el mensaje entrante
   const { chatId } = await recordMessage({
@@ -83,6 +97,7 @@ export async function handleMessageReceived(payload: unknown): Promise<void> {
     body: persistedBody,
     kapsoMessageId: message.id,
     name: contactName,
+    mediaUrl,
   });
 
   // 2. Si chat está en modo bot, procesar con el state machine (fire-and-forget)

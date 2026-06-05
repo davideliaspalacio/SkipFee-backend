@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/db';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SELECT = 'id, name, tarifa, recargo, color, lat, lng, archived';
+const SELECT = 'id, name, tarifa, recargo, color, lat, lng, archived, coverage, coverageRadiusM:coverage_radius_m';
 
 /**
  * PATCH /api/zones/[id] — edita una zona.
@@ -22,6 +22,8 @@ const patchSchema = z.object({
   lat: z.number().optional(),
   lng: z.number().optional(),
   archived: z.boolean().optional(), // archivar (true) / desarchivar (false)
+  coverage: z.array(z.object({ lat: z.number(), lng: z.number() })).min(3).nullable().optional(),
+  coverageRadiusM: z.number().int().positive().nullable().optional(),
 });
 
 export async function PATCH(request: NextRequest, context: { params: Promise<{ id: string }> }) {
@@ -41,9 +43,14 @@ export async function PATCH(request: NextRequest, context: { params: Promise<{ i
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });
   }
 
+  // El frontend manda `coverageRadiusM` (camelCase); la columna es snake_case.
+  const { coverageRadiusM, ...rest } = body;
+  const dbPatch: Record<string, unknown> = { ...rest };
+  if (coverageRadiusM !== undefined) dbPatch.coverage_radius_m = coverageRadiusM;
+
   const { data, error } = await supabaseAdmin()
     .from('zones')
-    .update(body)
+    .update(dbPatch)
     .eq('id', id)
     .select(SELECT)
     .single();

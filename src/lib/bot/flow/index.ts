@@ -15,9 +15,13 @@ import {
   handleRegistroEmail,
   handleRegistroConfirmar,
   handleDireccionTexto,
+  handleDireccionUbicacion,
   handleDireccionZona,
   handleDireccionConfirmar,
+  handleDireccionFueraCobertura,
   handleLinkEnviado,
+  handlePostventaEncuesta,
+  handlePostventaResena,
   iniciarPedido,
   escalarHumano,
   cancelarFlujo,
@@ -119,9 +123,13 @@ export async function routeFlow(ctx: HandlerContext): Promise<FlowState> {
     case 'registro_email':       return handleRegistroEmail(ctx);
     case 'registro_confirmar':   return handleRegistroConfirmar(ctx);
     case 'direccion_texto':      return handleDireccionTexto(ctx);
+    case 'direccion_ubicacion':  return handleDireccionUbicacion(ctx);
     case 'direccion_zona':       return handleDireccionZona(ctx);
     case 'direccion_confirmar':  return handleDireccionConfirmar(ctx);
+    case 'direccion_fuera_cobertura': return handleDireccionFueraCobertura(ctx);
     case 'link_enviado':         return handleLinkEnviado(ctx);
+    case 'postventa_encuesta':   return handlePostventaEncuesta(ctx);
+    case 'postventa_resena':     return handlePostventaResena(ctx);
     case 'inicio':               return handleEntrada(ctx);
     case 'finalizado':           return handleEntrada(ctx);
     default:                     return handleEntrada(ctx);

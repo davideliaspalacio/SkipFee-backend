@@ -5,7 +5,7 @@ import { supabaseAdmin } from '@/lib/db';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const SELECT = 'id, name, tarifa, recargo, color, lat, lng, archived';
+const SELECT = 'id, name, tarifa, recargo, color, lat, lng, archived, coverage, coverageRadiusM:coverage_radius_m';
 
 /**
  * GET /api/zones — zonas activas (con `?all=1` incluye archivadas, para el admin).
@@ -38,12 +38,16 @@ function slugify(name: string): string {
   return s || 'zona';
 }
 
+const coverageSchema = z.array(z.object({ lat: z.number(), lng: z.number() })).min(3);
+
 const createSchema = z.object({
   name: z.string().min(1).max(60),
   tarifa: z.number().int().nonnegative(),
   color: z.string().regex(/^#[0-9A-Fa-f]{6}$/).optional(),
   lat: z.number().optional(),
   lng: z.number().optional(),
+  coverage: coverageSchema.nullable().optional(),
+  coverageRadiusM: z.number().int().positive().nullable().optional(),
 });
 
 /**
@@ -82,6 +86,8 @@ export async function POST(request: NextRequest) {
       color: body.color ?? '#5E6AD2',
       lat: body.lat ?? 6.2442, // centro de Medellín por defecto
       lng: body.lng ?? -75.5812,
+      coverage: body.coverage ?? null,
+      coverage_radius_m: body.coverageRadiusM ?? null,
     })
     .select(SELECT)
     .single();

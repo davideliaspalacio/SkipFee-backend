@@ -126,6 +126,79 @@ describe('POST /api/checkout/sessions', () => {
     expect(up.email).toBeNull();
   });
 
+  it('persist=false + cliente existente ⇒ NO sobreescribe la dirección guardada', async () => {
+    const updateCapture = vi.fn();
+    supabaseStub = makeSupabaseStub({
+      zones: { single: { id: 'poblado', lat: 6.2087, lng: -75.5658 } },
+      customers: {
+        single: { id: 'cust-uuid-1' }, // ya existe
+        onUpdate: (payload) => { updateCapture(payload); return { data: { id: 'cust-uuid-1' } }; },
+        onUpsert: (payload) => { customerUpsertCapture(payload); return { data: { id: 'cust-uuid-1' } }; },
+      },
+      orders: {
+        onInsert: (p) => {
+          orderInsertCapture(p);
+          const x = p as { id: string; expires_at: string };
+          return { data: { id: x.id, expires_at: x.expires_at } };
+        },
+      },
+    });
+    const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
+      phone: '573136913188',
+      customer: { name: 'Edison Bedoya', email: 'edison@gmail.com' },
+      delivery: { address: 'Oficina de un amigo', zoneId: 'poblado', persist: false },
+    }));
+    expect(res.status).toBe(200);
+    // No upsert (no sobreescribe addr/zona); solo refresca nombre/email.
+    expect(customerUpsertCapture).not.toHaveBeenCalled();
+    expect(updateCapture).toHaveBeenCalledTimes(1);
+    const upd = updateCapture.mock.calls[0][0];
+    expect(upd.addr).toBeUndefined();
+    expect(upd.zone_id).toBeUndefined();
+    expect(upd.name).toBe('Edison Bedoya');
+    // La ORDEN sí lleva la dirección puntual de este pedido.
+    const order = orderInsertCapture.mock.calls[0][0];
+    expect(order.address).toBe('Oficina de un amigo');
+    expect(order.zone_id).toBe('poblado');
+  });
+
+  it('persist=false + cliente nuevo ⇒ lo crea con la dirección (no hay nada que preservar)', async () => {
+    supabaseStub = makeSupabaseStub({
+      zones: { single: { id: 'poblado', lat: 6.2087, lng: -75.5658 } },
+      customers: {
+        single: null, // no existe
+        onUpsert: (payload) => { customerUpsertCapture(payload); return { data: { id: 'cust-new' } }; },
+      },
+      orders: {
+        onInsert: (p) => {
+          orderInsertCapture(p);
+          const x = p as { id: string; expires_at: string };
+          return { data: { id: x.id, expires_at: x.expires_at } };
+        },
+      },
+    });
+    const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
+      phone: '573136913189',
+      customer: { name: 'Nuevo Cliente' },
+      delivery: { address: 'Cra 1 #2-3', zoneId: 'poblado', persist: false },
+    }));
+    expect(res.status).toBe(200);
+    expect(customerUpsertCapture).toHaveBeenCalledTimes(1);
+    expect(customerUpsertCapture.mock.calls[0][0].addr).toBe('Cra 1 #2-3');
+  });
+
+  it('delivery con lat/lng reales ⇒ la orden usa esas coords (no el centro de zona)', async () => {
+    const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
+      phone: '573136913188',
+      customer: { name: 'Ana' },
+      delivery: { address: 'Cra 1', zoneId: 'poblado', lat: 6.25, lng: -75.6 },
+    }));
+    expect(res.status).toBe(200);
+    const order = orderInsertCapture.mock.calls[0][0];
+    expect(order.lat).toBe(6.25);
+    expect(order.lng).toBe(-75.6);
+  });
+
   it('si delivery.zoneId no existe ⇒ 400', async () => {
     supabaseStub = makeSupabaseStub({
       zones: { single: null }, // zona no existe

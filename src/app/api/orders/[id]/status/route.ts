@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
 import { notifyOrderStatus } from '@/lib/orders/notify';
+import { redeemRewardForOrder } from '@/lib/orders/rewards';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,6 +97,24 @@ export async function PATCH(
     : result.error
       ? { ok: false, error: result.error }
       : null;
+
+  // 5. Post-venta (Tarea 3): al pagar, canjear (si hay) el cupón de postre
+  //    vigente del cliente en este pedido. Idempotente por pedido.
+  if (newStatus === 'pagado') {
+    await redeemRewardForOrder({ sb, orderId: id, phone: (order as { phone: string }).phone });
+  }
+
+  // 6. Post-venta (Tarea 3): al entregar, registrar la encuesta. El cron
+  //    `survey-dispatch` la enviará tras `survey_delay_hours`. Idempotente.
+  if (newStatus === 'entregado') {
+    const { error: surveyErr } = await sb
+      .from('order_surveys')
+      .upsert(
+        { order_id: id, phone: (order as { phone: string }).phone },
+        { onConflict: 'order_id', ignoreDuplicates: true },
+      );
+    if (surveyErr) console.error('[orders/status] crear order_survey error', surveyErr);
+  }
 
   return Response.json({
     ok: true,

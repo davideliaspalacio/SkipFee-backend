@@ -12,6 +12,8 @@ export interface IncomingMessage {
   listReplyId?: string;
   /** Ubicación compartida (type='location'). */
   location?: { lat: number; lng: number };
+  /** Imagen recibida (type='image'), p.ej. el screenshot de la reseña. */
+  image?: { id?: string; url?: string; caption?: string };
   /** Tipo original reportado por Kapso (para debugging). */
   rawType?: string;
 }
@@ -25,6 +27,9 @@ interface KapsoMessage {
     list_reply?: { id?: string; title?: string };
   };
   location?: { latitude?: number; longitude?: number };
+  // Kapso/WhatsApp puede entregar la imagen con `link` o `url` directo, o solo
+  // un `id` de media (a resolver aparte). Capturamos todo lo que venga.
+  image?: { id?: string; link?: string; url?: string; caption?: string };
 }
 
 export function parseIncoming(message: KapsoMessage): IncomingMessage {
@@ -48,6 +53,15 @@ export function parseIncoming(message: KapsoMessage): IncomingMessage {
     result.location = {
       lat: message.location.latitude ?? 0,
       lng: message.location.longitude ?? 0,
+    };
+    return result;
+  }
+
+  if (message.type === 'image' && message.image) {
+    result.image = {
+      id: message.image.id,
+      url: message.image.link ?? message.image.url,
+      caption: message.image.caption,
     };
     return result;
   }

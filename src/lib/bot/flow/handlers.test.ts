@@ -6,8 +6,12 @@ const sendTextMock = vi.fn();
 const sendCtaUrlMock = vi.fn();
 const sendButtonsMock = vi.fn();
 const sendListMock = vi.fn();
+const sendLocationRequestMock = vi.fn();
 const recordMessageMock = vi.fn();
 const fetchMock = vi.fn();
+const geocodeMock = vi.fn();
+const geocodingEnabledMock = vi.fn(() => true);
+const resolveZoneMock = vi.fn();
 
 vi.mock('@/lib/db', () => ({ supabaseAdmin: () => supabaseStub.client }));
 vi.mock('@/lib/kapso/client', () => ({ sendText: (...a: unknown[]) => sendTextMock(...a) }));
@@ -15,8 +19,17 @@ vi.mock('@/lib/kapso/interactive', () => ({
   sendCtaUrl: (...a: unknown[]) => sendCtaUrlMock(...a),
   sendButtons: (...a: unknown[]) => sendButtonsMock(...a),
   sendList: (...a: unknown[]) => sendListMock(...a),
+  sendLocationRequest: (...a: unknown[]) => sendLocationRequestMock(...a),
 }));
 vi.mock('@/lib/messaging', () => ({ recordMessage: (...a: unknown[]) => recordMessageMock(...a) }));
+vi.mock('@/lib/geo/google', () => ({
+  geocodeAddress: (...a: unknown[]) => geocodeMock(...a),
+  geocodingEnabled: () => geocodingEnabledMock(),
+}));
+vi.mock('./zones', () => ({ resolveZoneFromLatLng: (...a: unknown[]) => resolveZoneMock(...a) }));
+vi.mock('./gemini-fallback', () => ({
+  assistOffScript: vi.fn(async () => ({ intent: 'continue', reply: 'usá los botones del último mensaje' })),
+}));
 
 import {
   enviarLinkPedido,
@@ -26,9 +39,13 @@ import {
   handleRegistroEmail,
   handleRegistroConfirmar,
   handleDireccionTexto,
+  handleDireccionUbicacion,
   handleDireccionZona,
   handleDireccionConfirmar,
+  handleDireccionFueraCobertura,
   handleConfirmarRecurrente,
+  handlePostventaEncuesta,
+  handlePostventaResena,
   type HandlerContext,
 } from './handlers';
 import { routeFlow } from './index';
@@ -59,9 +76,17 @@ beforeEach(() => {
   sendCtaUrlMock.mockReset().mockResolvedValue({ messages: [{ id: 'wamid-2' }] });
   sendButtonsMock.mockReset().mockResolvedValue({ messages: [{ id: 'wamid-3' }] });
   sendListMock.mockReset().mockResolvedValue({ messages: [{ id: 'wamid-4' }] });
+  sendLocationRequestMock.mockReset().mockResolvedValue({ messages: [{ id: 'wamid-5' }] });
   recordMessageMock.mockReset().mockResolvedValue({ chatId: 'wa:573136913188' });
   fetchMock.mockReset();
   vi.stubGlobal('fetch', fetchMock);
+  // Geocoding ON por defecto, confianza alta, zona resuelta = poblado.
+  geocodeMock.mockReset().mockResolvedValue({
+    lat: 6.2, lng: -75.56, formatted: 'Cra 43A #5-15, Medellín',
+    locationType: 'ROOFTOP', partialMatch: false, confidence: 'alta',
+  });
+  geocodingEnabledMock.mockReset().mockReturnValue(true);
+  resolveZoneMock.mockReset().mockResolvedValue('poblado');
 });
 
 describe('iniciarPedido — decide nuevo vs recurrente', () => {
@@ -114,7 +139,7 @@ describe('Path RECURRENTE', () => {
     expect(next.step).toBe('link_enviado');
     const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
     expect(body.customer).toEqual({ name: 'Edison', email: 'edison@gmail.com' });
-    expect(body.delivery).toEqual({ address: 'Cra 43A', zoneId: 'poblado' });
+    expect(body.delivery).toEqual({ address: 'Cra 43A', zoneId: 'poblado', persist: true });
   });
 
   it('"Cambiar dir" ⇒ vuelve a direccion_texto', async () => {
@@ -184,18 +209,56 @@ describe('Path REGISTRO (cliente nuevo)', () => {
   });
 });
 
-describe('Path DIRECCIÓN', () => {
-  it('handleDireccionTexto ⇒ guarda dirección y muestra lista de zonas', async () => {
+describe('Path DIRECCIÓN (geocoding + 3 botones)', () => {
+  it('geocode confiable + dentro de zona ⇒ direccion_confirmar (botones guardar/cambiar/no guardar)', async () => {
+    supabaseStub = makeSupabaseStub({ zones: { single: { name: 'El Poblado', tarifa: 4500 } } });
+    resolveZoneMock.mockResolvedValue('poblado');
     const next = await handleDireccionTexto(ctxOf(
       { text: 'Cra 43A #5-15' },
       { step: 'direccion_texto', customer: { name: 'E', email: 'e@e.co' }, delivery: {} },
     ));
-    expect(next.step).toBe('direccion_zona');
+    expect(next.step).toBe('direccion_confirmar');
     expect(next.delivery?.address).toBe('Cra 43A #5-15');
+    expect(next.delivery?.zoneId).toBe('poblado');
+    expect(next.delivery?.lat).toBe(6.2);
+    const opts = sendButtonsMock.mock.calls[0][0];
+    expect(opts.buttons.map((b: { id: string }) => b.id)).toEqual([
+      'dir_si_guardar', 'dir_editar', 'dir_si_no_guardar',
+    ]);
+  });
+
+  it('geocode con confianza baja ⇒ pide ubicación (direccion_ubicacion)', async () => {
+    geocodeMock.mockResolvedValue({
+      lat: 6.2, lng: -75.5, formatted: 'x', locationType: 'APPROXIMATE', partialMatch: false, confidence: 'baja',
+    });
+    const next = await handleDireccionTexto(ctxOf(
+      { text: 'por el centro' },
+      { step: 'direccion_texto', delivery: {} },
+    ));
+    expect(next.step).toBe('direccion_ubicacion');
+    expect(next.delivery?.address).toBe('por el centro');
+    expect(sendLocationRequestMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('geocode confiable pero fuera de toda zona ⇒ direccion_fuera_cobertura', async () => {
+    resolveZoneMock.mockResolvedValue(null);
+    const next = await handleDireccionTexto(ctxOf(
+      { text: 'Bogotá centro' },
+      { step: 'direccion_texto', delivery: {} },
+    ));
+    expect(next.step).toBe('direccion_fuera_cobertura');
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin geocoding configurado ⇒ camino manual (lista de zonas)', async () => {
+    geocodingEnabledMock.mockReturnValue(false);
+    const next = await handleDireccionTexto(ctxOf(
+      { text: 'Cra 43A #5-15' },
+      { step: 'direccion_texto', delivery: {} },
+    ));
+    expect(next.step).toBe('direccion_zona');
     expect(sendListMock).toHaveBeenCalledTimes(1);
-    const opts = sendListMock.mock.calls[0][0];
-    expect(opts.sections[0].rows.length).toBeGreaterThan(0);
-    expect(opts.sections[0].rows[0].id).toMatch(/^zone_/);
+    expect(geocodeMock).not.toHaveBeenCalled();
   });
 
   it('handleDireccionTexto con dirección muy corta ⇒ se queda y re-pregunta', async () => {
@@ -207,10 +270,29 @@ describe('Path DIRECCIÓN', () => {
     expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('más detallada'));
   });
 
-  it('handleDireccionZona ⇒ guarda zona y muestra confirmación', async () => {
-    supabaseStub = makeSupabaseStub({
-      zones: { single: { id: 'poblado', name: 'El Poblado', tarifa: 4500 } },
-    });
+  it('handleDireccionUbicacion con ubicación dentro de zona ⇒ confirmar', async () => {
+    supabaseStub = makeSupabaseStub({ zones: { single: { name: 'El Poblado', tarifa: 4500 } } });
+    resolveZoneMock.mockResolvedValue('poblado');
+    const next = await handleDireccionUbicacion(ctxOf(
+      { location: { lat: 6.21, lng: -75.57 } },
+      { step: 'direccion_ubicacion', delivery: { address: 'Cra 43A' } },
+    ));
+    expect(next.step).toBe('direccion_confirmar');
+    expect(next.delivery?.lat).toBe(6.21);
+    expect(next.delivery?.zoneId).toBe('poblado');
+  });
+
+  it('handleDireccionUbicacion fuera de zona ⇒ fuera_cobertura', async () => {
+    resolveZoneMock.mockResolvedValue(null);
+    const next = await handleDireccionUbicacion(ctxOf(
+      { location: { lat: 4.6, lng: -74.0 } },
+      { step: 'direccion_ubicacion', delivery: { address: 'Bogotá' } },
+    ));
+    expect(next.step).toBe('direccion_fuera_cobertura');
+  });
+
+  it('handleDireccionZona (manual) ⇒ guarda zona y confirma', async () => {
+    supabaseStub = makeSupabaseStub({ zones: { single: { id: 'poblado', name: 'El Poblado', tarifa: 4500 } } });
     const next = await handleDireccionZona(ctxOf(
       { listReplyId: 'zone_poblado' },
       { step: 'direccion_zona', delivery: { address: 'Cra 43A' } },
@@ -222,30 +304,61 @@ describe('Path DIRECCIÓN', () => {
     expect(opts.body).toContain('El Poblado');
   });
 
-  it('handleDireccionConfirmar "Sí, correcta" ⇒ enviarLinkPedido', async () => {
+  it('"Sí y guardar" ⇒ enviarLink con persist=true (incluye lat/lng)', async () => {
     fetchMock.mockResolvedValue({
       json: async () => ({ ok: true, orderId: 'u2', url: 'http://localhost:5173/pedir?orderId=u2&userId=573136913188' }),
     });
     const next = await handleDireccionConfirmar(ctxOf(
-      { buttonReplyId: 'dir_si' },
+      { buttonReplyId: 'dir_si_guardar' },
       { step: 'direccion_confirmar',
         customer: { name: 'Edison', email: 'edison@gmail.com' },
+        delivery: { address: 'Cra 43A', zoneId: 'poblado', lat: 6.2, lng: -75.56 } },
+    ));
+    expect(next.step).toBe('link_enviado');
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.delivery.persist).toBe(true);
+    expect(body.delivery.lat).toBe(6.2);
+  });
+
+  it('"Sí pero no guardar" ⇒ enviarLink con persist=false', async () => {
+    fetchMock.mockResolvedValue({
+      json: async () => ({ ok: true, orderId: 'u3', url: 'http://localhost:5173/pedir?orderId=u3&userId=573136913188' }),
+    });
+    const next = await handleDireccionConfirmar(ctxOf(
+      { buttonReplyId: 'dir_si_no_guardar' },
+      { step: 'direccion_confirmar',
+        customer: { name: 'E' },
         delivery: { address: 'Cra 43A', zoneId: 'poblado' } },
     ));
     expect(next.step).toBe('link_enviado');
     const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
-    expect(body.customer.name).toBe('Edison');
-    expect(body.delivery.address).toBe('Cra 43A');
+    expect(body.delivery.persist).toBe(false);
   });
 
-  it('handleDireccionConfirmar "Editar" ⇒ vuelve a direccion_texto y limpia address', async () => {
+  it('"Cambiar dirección" ⇒ vuelve a direccion_texto y limpia address/coords', async () => {
     const next = await handleDireccionConfirmar(ctxOf(
       { buttonReplyId: 'dir_editar' },
-      { step: 'direccion_confirmar', delivery: { address: 'vieja', zoneId: 'poblado' } },
+      { step: 'direccion_confirmar', delivery: { address: 'vieja', zoneId: 'poblado', lat: 6.2, lng: -75.5 } },
     ));
     expect(next.step).toBe('direccion_texto');
     expect(next.delivery?.address).toBeUndefined();
-    expect(next.delivery?.zoneId).toBe('poblado'); // zona se preserva (recargarán al volver)
+    expect(next.delivery?.lat).toBeUndefined();
+  });
+
+  it('fuera de cobertura → "Hablar con alguien" ⇒ escala a humano', async () => {
+    const next = await handleDireccionFueraCobertura(ctxOf(
+      { buttonReplyId: 'fuera_humano' },
+      { step: 'direccion_fuera_cobertura', delivery: { address: 'lejos' } },
+    ));
+    expect(next.step).toBe('finalizado');
+  });
+
+  it('fuera de cobertura → "Otra dirección" ⇒ vuelve a direccion_texto', async () => {
+    const next = await handleDireccionFueraCobertura(ctxOf(
+      { buttonReplyId: 'fuera_cambiar' },
+      { step: 'direccion_fuera_cobertura', delivery: { address: 'lejos' } },
+    ));
+    expect(next.step).toBe('direccion_texto');
   });
 });
 
@@ -264,7 +377,7 @@ describe('enviarLinkPedido', () => {
     const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
     expect(body.phone).toBe('573136913188');
     expect(body.customer).toEqual({ name: 'Edison', email: 'edison@gmail.com' });
-    expect(body.delivery).toEqual({ address: 'Cra 43A', zoneId: 'poblado' });
+    expect(body.delivery).toEqual({ address: 'Cra 43A', zoneId: 'poblado', persist: true });
 
     expect(sendCtaUrlMock).toHaveBeenCalledTimes(1);
     expect(next.step).toBe('link_enviado');
@@ -356,5 +469,93 @@ describe('iniciarPedido — gate por horario / pausa', () => {
     const next = await iniciarPedido(ctxOf({ buttonReplyId: 'menu_pedir' }));
     expect(next.step).toBe('menu');
     expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('Pausamos'));
+  });
+});
+
+describe('Path POST-VENTA (encuesta + reseña)', () => {
+  it('encuesta rating 5 ⇒ invita a reseñar (cta_url con link+postre) y pasa a postventa_resena', async () => {
+    supabaseStub = makeSupabaseStub({
+      order_surveys: { onUpdate: () => ({}) },
+      settings: { single: { review_gift_name: 'Brownie', review_link: 'http://resena', review_gift_enabled: true, review_gift_expiry_days: 30 } },
+    });
+    const next = await handlePostventaEncuesta(ctxOf(
+      { listReplyId: 'survey_5' },
+      { step: 'postventa_encuesta', surveyOrderId: 'o1', customer: { name: 'Ana' } },
+    ));
+    expect(next.step).toBe('postventa_resena');
+    const opts = sendCtaUrlMock.mock.calls[0][0];
+    expect(opts.body).toContain('Brownie');
+    expect(opts.url).toBe('http://resena');
+  });
+
+  it('encuesta rating 2 ⇒ pasa a humano y finaliza', async () => {
+    const chatUpdate = vi.fn();
+    supabaseStub = makeSupabaseStub({
+      order_surveys: { onUpdate: () => ({}) },
+      chats: { onUpdate: (p) => { chatUpdate(p); return {}; } },
+    });
+    const next = await handlePostventaEncuesta(ctxOf(
+      { listReplyId: 'survey_2' },
+      { step: 'postventa_encuesta', surveyOrderId: 'o1', customer: { name: 'Ana' } },
+    ));
+    expect(next.step).toBe('finalizado');
+    expect(chatUpdate).toHaveBeenCalledWith({ status: 'human' });
+    expect(sendTextMock).toHaveBeenCalled();
+  });
+
+  it('encuesta rating 3 ⇒ también pasa a humano (umbral 1–3)', async () => {
+    const chatUpdate = vi.fn();
+    supabaseStub = makeSupabaseStub({
+      order_surveys: { onUpdate: () => ({}) },
+      chats: { onUpdate: (p) => { chatUpdate(p); return {}; } },
+    });
+    const next = await handlePostventaEncuesta(ctxOf(
+      { listReplyId: 'survey_3' },
+      { step: 'postventa_encuesta', surveyOrderId: 'o1' },
+    ));
+    expect(next.step).toBe('finalizado');
+    expect(chatUpdate).toHaveBeenCalledWith({ status: 'human' });
+  });
+
+  it('reseña con imagen ⇒ crea reward pendiente y pasa a humano', async () => {
+    const rewardInsert = vi.fn();
+    supabaseStub = makeSupabaseStub({
+      settings: { single: { review_gift_enabled: true, review_gift_name: 'Brownie' } },
+      rewards: { rows: [], onInsert: (p) => { rewardInsert(p); return {}; } },
+      chats: { onUpdate: () => ({}) },
+    });
+    const next = await handlePostventaResena(ctxOf(
+      { image: { url: 'http://shot' } },
+      { step: 'postventa_resena', surveyOrderId: 'o1' },
+    ));
+    expect(next.step).toBe('finalizado');
+    expect(rewardInsert).toHaveBeenCalledTimes(1);
+    const r = rewardInsert.mock.calls[0][0];
+    expect(r.status).toBe('pendiente');
+    expect(r.screenshot_url).toBe('http://shot');
+  });
+
+  it('reseña con imagen pero ya hay reward activo ⇒ no duplica', async () => {
+    const rewardInsert = vi.fn();
+    supabaseStub = makeSupabaseStub({
+      settings: { single: { review_gift_enabled: true, review_gift_name: 'Brownie' } },
+      rewards: { rows: [{ id: 'rw-activo', phone: '573136913188', status: 'otorgado' }], onInsert: (p) => { rewardInsert(p); return {}; } },
+      chats: { onUpdate: () => ({}) },
+    });
+    const next = await handlePostventaResena(ctxOf(
+      { image: { url: 'http://shot' } },
+      { step: 'postventa_resena', surveyOrderId: 'o1' },
+    ));
+    expect(next.step).toBe('finalizado');
+    expect(rewardInsert).not.toHaveBeenCalled();
+  });
+
+  it('reseña sin imagen ⇒ pide el pantallazo y se queda en postventa_resena', async () => {
+    const next = await handlePostventaResena(ctxOf(
+      { text: 'ya la dejé' },
+      { step: 'postventa_resena', surveyOrderId: 'o1' },
+    ));
+    expect(next.step).toBe('postventa_resena');
+    expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('pantallazo'));
   });
 });

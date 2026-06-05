@@ -319,19 +319,20 @@ const DEFS: MessageDef[] = [
   def({
     key: 'direccion.confirmar',
     category: 'conversacion',
-    step: 'direccion_zona',
+    step: 'direccion_confirmar',
     kind: 'buttons',
-    label: 'Confirmar dirección + zona',
+    label: 'Confirmar dirección + guardar',
+    description: 'Resumen de la entrega con 3 opciones: confirmar y guardar la dirección, cambiarla, o usarla solo para este pedido (sin guardar).',
     variables: ['direccion', 'zona', 'tarifa'],
     default: {
       body:
-        'Confirmo tu entrega:\n' +
+        '¿La dirección es correcta y deseas guardarla para futuros pedidos? 👇\n\n' +
         '📍 {{direccion}}\n' +
-        '🗺️ {{zona}} · domicilio ${{tarifa}}\n\n' +
-        '¿Es correcta?',
+        '🗺️ {{zona}} · domicilio ${{tarifa}}',
       buttons: [
-        { id: 'dir_si', title: '✅ Sí, correcta' },
-        { id: 'dir_editar', title: '✏️ Editar' },
+        { id: 'dir_si_guardar', title: '✅ Sí y guardar' },
+        { id: 'dir_editar', title: '✏️ Cambiar dirección' },
+        { id: 'dir_si_no_guardar', title: '❗ Sí pero no guardar' },
       ],
     },
   }),
@@ -353,6 +354,39 @@ const DEFS: MessageDef[] = [
     description: 'Se usa cuando el recurrente elige "Cambiar dir" y con la palabra clave "cambiar dirección".',
     variables: [],
     default: { body: '¿Cuál es tu *nueva dirección*? _(Ej: Cra 43A #5-15, apto 502)_' },
+  }),
+  def({
+    key: 'direccion.pedir_ubicacion',
+    category: 'conversacion',
+    step: 'direccion_ubicacion',
+    kind: 'text',
+    label: 'Pedir ubicación (GPS)',
+    description: 'Se envía con un botón de "Compartir ubicación" cuando no logramos ubicar bien la dirección escrita.',
+    variables: [],
+    default: {
+      body:
+        'Para ubicarte bien y confirmar que llegamos a tu zona, ¿me compartís tu *ubicación*? 📍\n' +
+        'Tocá el botón de abajo 👇',
+    },
+  }),
+  def({
+    key: 'direccion.fuera_cobertura',
+    category: 'conversacion',
+    step: 'direccion_fuera_cobertura',
+    kind: 'buttons',
+    label: 'Fuera de cobertura',
+    description: 'Cuando la dirección/ubicación cae fuera de todas las zonas. No se rechaza la venta: se ofrece hablar con un humano o cambiar la dirección.',
+    variables: ['direccion'],
+    default: {
+      body:
+        'Uy, por ahora no tengo cubierta esa dirección 😕\n' +
+        '📍 {{direccion}}\n\n' +
+        'Pero no te quedes con el antojo: ¿querés que te ayude una persona o probás con otra dirección?',
+      buttons: [
+        { id: 'fuera_humano', title: '🙋 Hablar con alguien' },
+        { id: 'fuera_cambiar', title: '✏️ Otra dirección' },
+      ],
+    },
   }),
 
   // ----- Envío del link / post-link -----
@@ -521,6 +555,24 @@ const DEFS: MessageDef[] = [
     default: { body: '¿Confirmás la dirección? Tocá uno de los botones del último mensaje.' },
   }),
   def({
+    key: 'nudge.direccion_ubicacion',
+    category: 'recordatorio',
+    step: 'direccion_ubicacion',
+    kind: 'text',
+    label: 'Recordatorio: compartir ubicación',
+    variables: [],
+    default: { body: '¿Seguís ahí? Compartime tu ubicación 📍 para confirmar que llegamos a tu zona.' },
+  }),
+  def({
+    key: 'nudge.direccion_fuera_cobertura',
+    category: 'recordatorio',
+    step: 'direccion_fuera_cobertura',
+    kind: 'text',
+    label: 'Recordatorio: fuera de cobertura',
+    variables: [],
+    default: { body: '¿Seguís ahí? Decime si querés que te ayude una persona o probar con otra dirección.' },
+  }),
+  def({
     key: 'nudge.link_enviado',
     category: 'recordatorio',
     step: 'link_enviado',
@@ -577,6 +629,100 @@ const DEFS: MessageDef[] = [
     label: 'Notificación: entregado',
     variables: ['saludo', 'nombre'],
     default: { body: '{{saludo}}, ¡tu pedido fue entregado! 🙌 Gracias por pedir en Bros and Subs.' },
+  }),
+
+  // ----- Post-venta: encuesta + reseña + regalo (Tarea 3) -----
+  def({
+    key: 'postventa.encuesta',
+    category: 'notificacion',
+    step: 'postventa_encuesta',
+    kind: 'list',
+    label: 'Encuesta de satisfacción (1–5)',
+    description: 'Se envía un tiempo después de entregar. Las filas 1–5 (⭐) las arma el bot.',
+    variables: [],
+    default: {
+      body: '¿Cómo te fue con tu pedido? 🥪\nCalificá tu experiencia del 1 al 5 (5 = la mejor).',
+      buttonText: 'Calificar',
+    },
+  }),
+  def({
+    key: 'postventa.encuesta_invalida',
+    category: 'notificacion',
+    step: 'postventa_encuesta',
+    kind: 'text',
+    label: 'Encuesta: opción inválida',
+    variables: [],
+    default: { body: 'Tocá una opción del 1 al 5 ⭐ en el último mensaje para calificar 🙏' },
+  }),
+  def({
+    key: 'postventa.gracias_baja',
+    category: 'notificacion',
+    step: 'postventa_encuesta',
+    kind: 'text',
+    label: 'Calificación baja (1–3) → humano',
+    description: 'Cuando la nota es ≤3 el chat pasa a un humano y en el panel aparece una alerta.',
+    variables: ['nombre'],
+    default: {
+      body:
+        'Lamento mucho que no haya salido como esperabas 😔\n' +
+        'Ya le paso tu caso a una persona del equipo para ayudarte de una.',
+    },
+  }),
+  def({
+    key: 'postventa.invitar_resena',
+    category: 'notificacion',
+    step: 'postventa_encuesta',
+    kind: 'cta_url',
+    label: 'Calificación alta (4–5) → invitar reseña',
+    description: 'La URL de la reseña se inyecta automáticamente (configurable en Reseñas).',
+    variables: ['postre'],
+    default: {
+      body:
+        '¡Qué alegría que te haya gustado! 🤩\n' +
+        'Si nos regalás una reseña y nos mandás el *pantallazo*, tu próximo pedido lleva *{{postre}} gratis* 🍰',
+      displayText: 'Dejar reseña ⭐',
+    },
+  }),
+  def({
+    key: 'postventa.resena_pedir_screenshot',
+    category: 'notificacion',
+    step: 'postventa_resena',
+    kind: 'text',
+    label: 'Pedir el pantallazo de la reseña',
+    variables: [],
+    default: { body: 'Cuando dejes la reseña, mandame el *pantallazo* por acá y activo tu postre 🍰' },
+  }),
+  def({
+    key: 'postventa.resena_recibida',
+    category: 'notificacion',
+    step: 'postventa_resena',
+    kind: 'text',
+    label: 'Reseña recibida (en verificación)',
+    variables: ['postre'],
+    default: {
+      body:
+        '¡Gracias por tu reseña! 🙌 La estamos validando y te confirmamos tu *{{postre}}* ' +
+        'para el próximo pedido en un ratico.',
+    },
+  }),
+  def({
+    key: 'reward.aprobado',
+    category: 'notificacion',
+    step: null,
+    kind: 'text',
+    label: 'Postre aprobado',
+    description: 'Se envía cuando el operario verifica la reseña y otorga el cupón.',
+    variables: ['postre'],
+    default: { body: '¡Listo! 🎉 Tu *{{postre}}* gratis te espera en tu próximo pedido. ¡Gracias por la reseña! 🥪' },
+  }),
+  def({
+    key: 'reward.rechazado',
+    category: 'notificacion',
+    step: null,
+    kind: 'text',
+    label: 'Reseña no verificada',
+    variables: [],
+    default: { body: 'No pudimos validar tu reseña esta vez 🙏 Si creés que es un error, escribinos *asesor*.' },
   }),
 
   // ----- Sistema / avanzado -----
