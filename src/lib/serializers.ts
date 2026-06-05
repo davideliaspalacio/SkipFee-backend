@@ -20,6 +20,7 @@ interface OrderRow {
   created_at: string;
   customer: { id: string; name: string } | { id: string; name: string }[] | null;
   zone: { id: string; name: string } | { id: string; name: string }[] | null;
+  cook?: { id: string; name: string } | { id: string; name: string }[] | null;
   items: Array<{
     qty: number;
     product: { name: string } | { name: string }[] | null;
@@ -34,6 +35,7 @@ function pickOne<T>(value: T | T[] | null): T | null {
 export function serializeOrder(row: OrderRow) {
   const customer = pickOne(row.customer);
   const zone = pickOne(row.zone);
+  const cook = pickOne(row.cook ?? null);
   const itemList = (row.items ?? []).map(it => {
     const product = pickOne(it.product);
     return `${it.qty}× ${product?.name ?? '?'}`;
@@ -60,6 +62,8 @@ export function serializeOrder(row: OrderRow) {
     zoneName: zone?.name ?? '',
     status: unpaid ? 'nuevo' : row.status,
     unpaid,
+    cookId: cook?.id ?? undefined,
+    cookName: cook?.name ?? undefined,
     minutos,
     address: row.address,
     phone: row.phone,

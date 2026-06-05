@@ -162,6 +162,9 @@ export async function POST(request: NextRequest) {
     }
     console.log('[wompi webhook real] orden pagada', { orderId: order.id, txId: txn.id });
 
+    // La asignación de cocinero la hace el trigger de BD `assign_cook_on_paid`
+    // (migración 0020) al pasar a 'pagado' — no se invoca desde el código.
+
     // Side effects (mismo patrón que el webhook mock): no rompen la respuesta.
     try {
       const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
