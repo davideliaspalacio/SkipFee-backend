@@ -40,13 +40,17 @@ describe('isPublicPath', () => {
 
 describe('allowedOrigins / isAllowedOrigin', () => {
   const ORIG = process.env.STOREFRONT_ORIGIN;
+  const ORIG_EXTRA = process.env.EXTRA_CORS_ORIGINS;
   afterEach(() => {
     if (ORIG === undefined) delete process.env.STOREFRONT_ORIGIN;
     else process.env.STOREFRONT_ORIGIN = ORIG;
+    if (ORIG_EXTRA === undefined) delete process.env.EXTRA_CORS_ORIGINS;
+    else process.env.EXTRA_CORS_ORIGINS = ORIG_EXTRA;
   });
 
   it('incluye localhost:5173 por defecto y rechaza orígenes desconocidos', () => {
     delete process.env.STOREFRONT_ORIGIN;
+    delete process.env.EXTRA_CORS_ORIGINS;
     expect(isAllowedOrigin('http://localhost:5173')).toBe(true);
     expect(isAllowedOrigin('http://127.0.0.1:5173')).toBe(true);
     expect(isAllowedOrigin('https://evil.example.com')).toBe(false);
@@ -57,5 +61,15 @@ describe('allowedOrigins / isAllowedOrigin', () => {
     process.env.STOREFRONT_ORIGIN = 'https://tienda.brosandsubs.com';
     expect(allowedOrigins()).toContain('https://tienda.brosandsubs.com');
     expect(isAllowedOrigin('https://tienda.brosandsubs.com')).toBe(true);
+  });
+
+  it('suma EXTRA_CORS_ORIGINS (lista por comas, con trim y dedup)', () => {
+    delete process.env.STOREFRONT_ORIGIN;
+    process.env.EXTRA_CORS_ORIGINS = 'https://panel.com, http://localhost:4173 ,http://localhost:5173';
+    const origins = allowedOrigins();
+    expect(origins).toContain('https://panel.com');
+    expect(origins).toContain('http://localhost:4173');
+    expect(isAllowedOrigin('https://panel.com')).toBe(true);
+    expect(origins.filter(o => o === 'http://localhost:5173')).toHaveLength(1); // dedup con dev
   });
 });
