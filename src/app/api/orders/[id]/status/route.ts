@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
 import { notifyOrderStatus } from '@/lib/orders/notify';
 import { redeemRewardForOrder } from '@/lib/orders/rewards';
+import { sendDeliverySurvey } from '@/lib/orders/survey';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -104,16 +105,12 @@ export async function PATCH(
     await redeemRewardForOrder({ sb, orderId: id, phone: (order as { phone: string }).phone });
   }
 
-  // 6. Post-venta (Tarea 3): al entregar, registrar la encuesta. El cron
-  //    `survey-dispatch` la enviará tras `survey_delay_hours`. Idempotente.
-  if (newStatus === 'entregado') {
-    const { error: surveyErr } = await sb
-      .from('order_surveys')
-      .upsert(
-        { order_id: id, phone: (order as { phone: string }).phone },
-        { onConflict: 'order_id', ignoreDuplicates: true },
-      );
-    if (surveyErr) console.error('[orders/status] crear order_survey error', surveyErr);
+  // 6. Post-venta (Tarea 3): al entregar, enviar la encuesta de satisfacción
+  //    JUSTO DESPUÉS del mensaje de "entregado" (síncrono, sin cron).
+  //    `result.sent` garantiza que se manda una sola vez (la notificación de
+  //    entregado ya es idempotente vía notified_statuses).
+  if (newStatus === 'entregado' && result.sent) {
+    await sendDeliverySurvey({ sb, orderId: id, phone: (order as { phone: string }).phone });
   }
 
   return Response.json({
