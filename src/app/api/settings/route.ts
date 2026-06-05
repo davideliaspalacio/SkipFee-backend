@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
+import { HHMM, hoursSchema } from '@/lib/hours-schema';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -42,17 +43,7 @@ export async function GET() {
   });
 }
 
-const HHMM = /^\d{2}:\d{2}$/;
-const dayHoursSchema = z.object({
-  closed: z.boolean().optional(),
-  open: z.string().regex(HHMM).optional(),
-  close: z.string().regex(HHMM).optional(),
-});
-const hoursSchema = z.record(
-  z.enum(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun']),
-  dayHoursSchema,
-);
-
+// HHMM y hoursSchema viven en @/lib/hours-schema (compartidos con cooks).
 const patchSchema = z.object({
   openHour: z.string().regex(HHMM).optional(),
   closeHour: z.string().regex(HHMM).optional(),
