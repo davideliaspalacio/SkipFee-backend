@@ -82,7 +82,7 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
   // Las promos las filtra `computeOrderTotals` por aplicabilidad real.
   const [{ data: products }, { data: settings }, { data: promotions }] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available'),
-    sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
+    sb.from('settings').select('peak_start, peak_end, base_delivery_fee, review_gift_product_id').eq('id', 1).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
       .eq('active', true),
@@ -109,8 +109,18 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     zone = z;
   }
 
+  // El postre de regalo (si está vinculado) NO es un item editable: se inyecta
+  // aparte como línea $0 y suele estar "no disponible" (oculto del menú). Si el
+  // cliente lo reenvía en el body, lo ignoramos para no marcarlo "no disponible"
+  // ni persistirlo — el order_item real lo agrega el canje al pagar.
+  const giftProductId =
+    (settings as { review_gift_product_id?: string | null }).review_gift_product_id ?? null;
+  const clientItems = giftProductId
+    ? parsed.items.filter(i => i.productId !== giftProductId)
+    : parsed.items;
+
   const totals = computeOrderTotals({
-    items: parsed.items,
+    items: clientItems,
     products: (products ?? []) as TotalsProduct[],
     zone,
     settings,

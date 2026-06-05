@@ -151,6 +151,31 @@ describe('PUT /api/checkout/:orderId/cart', () => {
     expect(updateCapture).not.toHaveBeenCalled();
   });
 
+  it('ignora el producto de regalo si llega en el body (no lo marca "no disponible")', async () => {
+    // Regresión: el postre de regalo (available:false) se inyecta como línea $0 y
+    // el front lo reenviaba al guardar → el server lo marcaba "no disponible" y
+    // rechazaba el carrito. Ahora se filtra por review_gift_product_id.
+    const order = { ...validBorrador(), phone: '573000' };
+    supabaseStub = makeSupabaseStub({
+      ...tablesFor(order),
+      products: { rows: [...PRODUCTS, { id: 'gift1', name: 'Postre de regalo', price: 0, cat: 'Regalo', available: false }] },
+      settings: { single: { ...SETTINGS, review_gift_product_id: 'gift1' } },
+      rewards: { rows: [{ id: 'rw1', phone: '573000', status: 'otorgado' }] },
+    });
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }, { productId: 'gift1', qty: 1 }] }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(200); // NO 409
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    // El gift NO se persiste como item del cliente: solo p01 se inserta.
+    const inserted = itemsInsertCapture.mock.calls[0][0];
+    expect(inserted).toEqual([{ order_id: 'o1', product_id: 'p01', qty: 1, price_at_order: 28000 }]);
+    // El carrito devuelto incluye la línea de regalo inyectada ($0).
+    expect(body.cart.items).toContainEqual({ productId: 'gift1', name: 'Postre de regalo', qty: 1, price: 0, lineTotal: 0, gift: true });
+  });
+
   it('orden vencida ⇒ 409 status expirada', async () => {
     supabaseStub = makeSupabaseStub(tablesFor({ id: 'o1', status: 'borrador', expires_at: new Date(Date.now() - 1000).toISOString() }));
     const res = await PUT(jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }] }), asyncParams({ orderId: 'o1' }));
