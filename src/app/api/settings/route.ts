@@ -46,6 +46,7 @@ export async function GET() {
       reviewGiftExpiryDays: data.review_gift_expiry_days ?? 30,
       reviewLink: data.review_link ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
       surveyMinDays: data.survey_min_days ?? 30,
+      reviewGiftProductId: data.review_gift_product_id ?? null,
       updatedAt: data.updated_at,
     },
   });
@@ -72,6 +73,8 @@ const patchSchema = z.object({
   reviewGiftExpiryDays: z.number().int().min(1).max(365).optional(),
   reviewLink: z.string().url().max(500).optional(),
   surveyMinDays: z.number().int().min(0).max(365).optional(),
+  // Producto de la categoría "Regalo" que se entrega gratis. null = desvincular.
+  reviewGiftProductId: z.string().min(1).max(60).nullable().optional(),
 });
 
 export async function PATCH(request: NextRequest) {
@@ -105,6 +108,7 @@ export async function PATCH(request: NextRequest) {
   if (body.reviewGiftExpiryDays !== undefined) update.review_gift_expiry_days = body.reviewGiftExpiryDays;
   if (body.reviewLink !== undefined) update.review_link = body.reviewLink;
   if (body.surveyMinDays !== undefined) update.survey_min_days = body.surveyMinDays;
+  if (body.reviewGiftProductId !== undefined) update.review_gift_product_id = body.reviewGiftProductId;
 
   if (Object.keys(update).length === 0) {
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });

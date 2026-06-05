@@ -7,7 +7,8 @@ export const dynamic = 'force-dynamic';
 
 const patchSchema = z.object({
   available: z.boolean().optional(),
-  price: z.number().int().positive().optional(),
+  // nonnegative (no positive): permite $0 para productos de regalo.
+  price: z.number().int().nonnegative().optional(),
   name: z.string().min(1).max(120).optional(),
   cat: z.string().min(1).max(60).optional(),
   img: z.string().max(1000).optional(),

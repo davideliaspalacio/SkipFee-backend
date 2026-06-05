@@ -28,7 +28,9 @@ export async function GET() {
 
 const createSchema = z.object({
   name: z.string().min(1).max(120),
-  price: z.number().int().positive(),
+  // nonnegative (no positive): permite productos a $0, p. ej. el postre de la
+  // categoría "Regalo" que se entrega gratis por dejar reseña.
+  price: z.number().int().nonnegative(),
   cat: z.string().min(1).max(60),
   available: z.boolean().optional().default(true),
   /** URL externa o de Storage. Si el cliente recién creó el producto y va a

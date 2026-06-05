@@ -81,11 +81,20 @@ describe('POST /api/products', () => {
     expect(body.ok).toBe(false);
   });
 
-  it('400 si precio no es positivo', async () => {
+  it('400 si precio es negativo', async () => {
     const res = await POST(jsonRequest('http://localhost:3000/api/products', 'POST', {
-      name: 'X', price: 0, cat: 'X',
+      name: 'X', price: -1, cat: 'X',
     }));
     expect(res.status).toBe(400);
+  });
+
+  it('permite precio 0 (productos de regalo, categoría "Regalo")', async () => {
+    const res = await POST(jsonRequest('http://localhost:3000/api/products', 'POST', {
+      name: 'Postre de regalo', price: 0, cat: 'Regalo',
+    }));
+    expect(res.status).toBe(201);
+    const body = await res.json();
+    expect(body.product.price).toBe(0);
   });
 
   it('400 si JSON inválido', async () => {

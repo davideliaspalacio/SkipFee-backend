@@ -113,24 +113,30 @@ describe('GET /api/checkout/:orderId', () => {
     expect(body.order.customer).toBeNull();
   });
 
-  it('cliente con cupón de postre otorgado ⇒ order.gift con el nombre del regalo', async () => {
+  it('cliente con cupón otorgado + producto de regalo ⇒ línea $0 en el carrito y order.gift', async () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
       id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
       address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
       customer: { name: 'Ana', email: null }, items: [],
     };
+    const giftProduct = { id: 'gift1', name: 'Postre de regalo', price: 0, cat: 'Regalo', available: true, img: '', description: null };
     supabaseStub = makeSupabaseStub({
       orders: { single: order },
-      products: { rows: PRODUCTS },
+      products: { rows: [...PRODUCTS, giftProduct] },
       zones: { rows: ZONES },
-      settings: { single: { ...SETTINGS, review_gift_name: 'Brownie' } },
+      settings: { single: { ...SETTINGS, review_gift_product_id: 'gift1' } },
       rewards: { rows: [{ id: 'rw1', phone: '573136913188', status: 'otorgado' }] },
     });
     const res = await GET(getRequest(url('o1', '573136913188')), asyncParams({ orderId: 'o1' }));
     const body = await res.json();
     expect(body.status).toBe('valida');
-    expect(body.order.gift).toEqual({ name: 'Brownie' });
+    // El postre aparece como LÍNEA del carrito a $0, marcada gift.
+    expect(body.order.cart.items).toContainEqual({
+      productId: 'gift1', name: 'Postre de regalo', qty: 1, price: 0, lineTotal: 0, gift: true,
+    });
+    // order.gift se mantiene (compat) con el nombre del producto.
+    expect(body.order.gift).toEqual({ name: 'Postre de regalo' });
   });
 
   it('cliente sin cupón otorgado ⇒ order.gift es null', async () => {

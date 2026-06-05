@@ -54,7 +54,7 @@ export function buildCatalog(products: CatalogProduct[]): Catalog {
 }
 
 export interface Cart {
-  items: Array<{ productId: string; name: string; qty: number; price: number; lineTotal: number }>;
+  items: Array<{ productId: string; name: string; qty: number; price: number; lineTotal: number; gift?: boolean }>;
   subtotal: number;
   /** Descuento total aplicado por la promo automática (siempre ≥0). 0 si no hay. */
   discount: number;

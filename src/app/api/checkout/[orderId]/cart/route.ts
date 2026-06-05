@@ -2,7 +2,8 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
-import { classifyOrder } from '@/lib/checkout/shape';
+import { classifyOrder, type Cart } from '@/lib/checkout/shape';
+import { giftCartLine } from '@/lib/checkout/gift';
 import { computeOrderTotals, type TotalsProduct, type TotalsZone } from '@/lib/checkout/totals';
 import type { PromotionRow } from '@/lib/checkout/promotions';
 
@@ -60,10 +61,10 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
 
   const { data: order } = (await sb
     .from('orders')
-    .select('id, status, expires_at, zone_id')
+    .select('id, status, expires_at, zone_id, phone')
     .eq('id', orderId)
     .single()) as {
-    data: { id: string; status: string; expires_at: string | null; zone_id: string | null } | null;
+    data: { id: string; status: string; expires_at: string | null; zone_id: string | null; phone: string } | null;
   };
 
   const status = classifyOrder(order, new Date());
@@ -181,10 +182,16 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
       }
     : null;
 
+  // Postre de regalo (Tarea 3): se muestra como línea $0 en el carrito (igual que
+  // en el GET). No se persiste en order_items hasta pagar (redeemRewardForOrder).
+  const giftLine = await giftCartLine(sb, order.phone);
+  const items: Cart['items'] = [...totals.items];
+  if (giftLine) items.push(giftLine);
+
   return jsonWithCors({
     ok: true,
     cart: {
-      items: totals.items,
+      items,
       subtotal: totals.subtotal,
       discount: totals.discount,
       delivery: totals.delivery,
