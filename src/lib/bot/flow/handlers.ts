@@ -56,9 +56,15 @@ async function botSendText(opts: { to: string; body: string }) {
   });
 }
 
+/**
+ * Envía un mensaje interactivo (botones, lista, CTA URL) y guarda en el
+ * historial el cuerpo real que vio el cliente. Antes guardábamos un
+ * placeholder bracketado (`[confirmar dirección]`) — útil para logs pero
+ * confuso en el panel admin, donde se renderiza tal cual.
+ */
 async function botSendInteractive<T extends { messages?: Array<{ id?: string }> }>(opts: {
   to: string;
-  preview: string;
+  body: string;
   send: () => Promise<T>;
 }) {
   const result = await opts.send();
@@ -66,7 +72,7 @@ async function botSendInteractive<T extends { messages?: Array<{ id?: string }> 
   await recordMessage({
     phone: opts.to,
     direction: 'bot',
-    body: opts.preview,
+    body: opts.body,
     kapsoMessageId: wamid,
   });
 }
@@ -86,16 +92,16 @@ async function sendCatalogButtons(opts: {
   to: string;
   key: string;
   vars?: RenderVars;
-  preview: string;
 }) {
   const m = await getMessage(opts.key);
+  const body = render(m.body, opts.vars);
   await botSendInteractive({
     to: opts.to,
-    preview: opts.preview,
+    body,
     send: () =>
       sendButtons({
         to: opts.to,
-        body: render(m.body, opts.vars),
+        body,
         buttons: renderButtons(m.buttons, opts.vars),
       }),
   });
@@ -123,7 +129,7 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
 
   await botSendInteractive({
     to: ctx.phone,
-    preview: '[saludo + menú pedir]',
+    body,
     // Antes había también "🙋 Hablar humano" — lo quitamos para que el
     // primer touch sea exclusivamente comercial. Si un cliente igual
     // necesita atención humana puede escribirlo y `manejarTextoLibre`
@@ -195,7 +201,6 @@ export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
     await sendCatalogButtons({
       to: ctx.phone,
       key: 'recurrente.confirmar',
-      preview: '[confirmar datos recurrente]',
       vars: {
         nombre: (customer.name as string).split(' ')[0],
         direccion: customer.addr as string,
@@ -278,7 +283,6 @@ export async function handleRegistroEmail(ctx: HandlerContext): Promise<FlowStat
   await sendCatalogButtons({
     to: ctx.phone,
     key: 'registro.confirmar',
-    preview: '[confirmar registro nombre+email]',
     vars: { nombre: next.name ?? '?', correo: text },
   });
   return { ...ctx.state, step: 'registro_confirmar', customer: next };
@@ -305,7 +309,6 @@ export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<Flow
       await sendCatalogButtons({
         to: ctx.phone,
         key: 'registro.confirmar',
-        preview: '[reenvío confirmar registro]',
         vars: { nombre: c.name ?? '?', correo: c.email ?? '?' },
       });
       return ctx.state;
@@ -372,7 +375,7 @@ async function pedirZonaManual(
     await sendCatalogText(ctx.phone, 'direccion.sin_zonas');
     return ctx.state;
   }
-  await sendZoneList(ctx.phone, zonesList, '[lista de zonas]');
+  await sendZoneList(ctx.phone, zonesList);
   return {
     ...ctx.state,
     step: 'direccion_zona',
@@ -384,17 +387,17 @@ async function pedirZonaManual(
 async function sendZoneList(
   to: string,
   zonesList: Array<{ id: string; name: string; tarifa: number }>,
-  preview: string,
 ) {
   const m = await getMessage('direccion.pedir_zona');
   const rowTpl = m.rowDescriptionTemplate ?? 'Domicilio ${{tarifa}}';
+  const body = render(m.body);
   await botSendInteractive({
     to,
-    preview,
+    body,
     send: () =>
       sendList({
         to,
-        body: render(m.body),
+        body,
         buttonText: m.buttonText ?? 'Ver zonas',
         sections: [
           {
@@ -423,7 +426,7 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
           .eq('archived', false)
           .order('name');
         const list = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
-        await sendZoneList(ctx.phone, list, '[reenvío lista de zonas]');
+        await sendZoneList(ctx.phone, list);
         return ctx.state;
       },
     });
@@ -453,7 +456,6 @@ async function confirmarDireccion(ctx: HandlerContext, delivery: FlowDelivery): 
   await sendCatalogButtons({
     to: ctx.phone,
     key: 'direccion.confirmar',
-    preview: '[confirmar dirección]',
     vars: {
       direccion: delivery.address ?? '',
       zona: (zone?.name as string) ?? '',
@@ -468,7 +470,6 @@ async function irFueraCobertura(ctx: HandlerContext, delivery: FlowDelivery): Pr
   await sendCatalogButtons({
     to: ctx.phone,
     key: 'direccion.fuera_cobertura',
-    preview: '[dirección fuera de cobertura]',
     vars: { direccion: delivery.address ?? '' },
   });
   return { ...ctx.state, step: 'direccion_fuera_cobertura', delivery };
@@ -589,14 +590,20 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
   }
 
   const linkMsg = await getMessage('link.enviar');
+  const linkBody = render(linkMsg.body);
+  const linkDisplay = linkMsg.displayText ?? 'Ver carta y pedir 🛒';
   await botSendInteractive({
     to: ctx.phone,
-    preview: '[link tienda: ver carta y pedir]',
+    // El CTA URL en WhatsApp se ve como `body` + un botón con `displayText`
+    // que abre `url`. Para el panel admin guardamos los tres: body, etiqueta
+    // del botón y url, para que el operario vea exactamente lo que recibió
+    // el cliente.
+    body: `${linkBody}\n\n🔗 ${linkDisplay}: ${url}`,
     send: () =>
       sendCtaUrl({
         to: ctx.phone,
-        body: render(linkMsg.body),
-        displayText: linkMsg.displayText ?? 'Ver carta y pedir 🛒',
+        body: linkBody,
+        displayText: linkDisplay,
         url,
       }),
   });
@@ -635,13 +642,14 @@ async function loadPostventaSettings(): Promise<PostventaSettings> {
  */
 export async function sendSurvey(opts: { phone: string; orderId: string }): Promise<void> {
   const m = await getMessage('postventa.encuesta');
+  const encuestaBody = render(m.body);
   await botSendInteractive({
     to: opts.phone,
-    preview: '[encuesta 1–5]',
+    body: encuestaBody,
     send: () =>
       sendList({
         to: opts.phone,
-        body: render(m.body),
+        body: encuestaBody,
         buttonText: m.buttonText ?? 'Calificar',
         sections: [
           {
@@ -696,14 +704,16 @@ export async function handlePostventaEncuesta(ctx: HandlerContext): Promise<Flow
   // Rama alta (4–5): invitar a reseñar con link + promesa del postre.
   const settings = await loadPostventaSettings();
   const linkMsg = await getMessage('postventa.invitar_resena');
+  const resenaBody = render(linkMsg.body, { postre: settings.reviewGiftName });
+  const resenaDisplay = linkMsg.displayText ?? 'Dejar reseña ⭐';
   await botSendInteractive({
     to: ctx.phone,
-    preview: '[invitar reseña + postre]',
+    body: `${resenaBody}\n\n🔗 ${resenaDisplay}: ${settings.reviewLink}`,
     send: () =>
       sendCtaUrl({
         to: ctx.phone,
-        body: render(linkMsg.body, { postre: settings.reviewGiftName }),
-        displayText: linkMsg.displayText ?? 'Dejar reseña ⭐',
+        body: resenaBody,
+        displayText: resenaDisplay,
         url: settings.reviewLink,
       }),
   });
@@ -825,7 +835,6 @@ async function reenviarMenu(ctx: HandlerContext): Promise<FlowState> {
   await sendCatalogButtons({
     to: ctx.phone,
     key: 'menu.pedir',
-    preview: '[reenvío menú]',
   });
   return { ...ctx.state, step: 'menu' };
 }
