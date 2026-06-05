@@ -40,15 +40,25 @@ export async function redeemRewardForOrder(opts: {
 
     const { data: settings } = await sb
       .from('settings')
-      .select('review_gift_name')
+      .select('review_gift_name, review_gift_product_id')
       .eq('id', 1)
       .maybeSingle();
     const postre = (settings?.review_gift_name as string) ?? 'Postre';
+    const giftProductId = (settings?.review_gift_product_id as string | null) ?? null;
 
     await sb
       .from('rewards')
       .update({ status: 'canjeado', redeemed_at: nowIso, redeemed_order_id: orderId })
       .eq('id', reward.id);
+
+    // Si el regalo está vinculado a un producto real (categoría "Regalo"), lo
+    // agregamos como order_item a $0 → la cocina lo ve en el kanban como un ítem
+    // más del pedido. Idempotente por el guard de redeemed_order_id de arriba.
+    if (giftProductId) {
+      await sb
+        .from('order_items')
+        .insert({ order_id: orderId, product_id: giftProductId, qty: 1, price_at_order: 0 });
+    }
 
     // Constancia en la nota del pedido (append, sin pisar la del cliente).
     const { data: order } = await sb.from('orders').select('note').eq('id', orderId).maybeSingle();

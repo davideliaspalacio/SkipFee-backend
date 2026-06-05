@@ -31,6 +31,28 @@ describe('redeemRewardForOrder', () => {
     expect(note).toContain('sin cebolla'); // append, no reemplazo
   });
 
+  it('si hay producto de regalo configurado ⇒ inserta un order_item $0 para la cocina', async () => {
+    const itemInsert = vi.fn();
+    const stub = makeSupabaseStub({
+      rewards: {
+        rows: [{ id: 'rw1', phone: '573000', status: 'otorgado', redeemed_order_id: null }],
+        onUpdate: () => ({}),
+      },
+      settings: { single: { review_gift_name: 'Brownie', review_gift_product_id: 'gift1' } },
+      orders: { single: { note: null }, onUpdate: () => ({}) },
+      order_items: { onInsert: (p) => { itemInsert(p); return {}; } },
+    });
+    const res = await redeemRewardForOrder({
+      sb: stub.client as SupabaseClient,
+      orderId: 'o9',
+      phone: '573000',
+    });
+    expect(res.redeemed).toBe(true);
+    expect(itemInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ order_id: 'o9', product_id: 'gift1', qty: 1, price_at_order: 0 }),
+    );
+  });
+
   it('idempotente: si el pedido ya tiene un cupón canjeado, no hace nada', async () => {
     const stub = makeSupabaseStub({
       rewards: { rows: [{ id: 'rwX', redeemed_order_id: 'o9' }] },

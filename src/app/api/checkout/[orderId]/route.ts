@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
 import { buildCatalog, classifyOrder, emptyCart } from '@/lib/checkout/shape';
+import { giftCartLine } from '@/lib/checkout/gift';
 import { computeOrderTotals, type TotalsProduct, type TotalsZone } from '@/lib/checkout/totals';
 import { loadOpenState } from '@/lib/hours';
 import type { PromotionRow } from '@/lib/checkout/promotions';
@@ -88,22 +89,15 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   // Las promos las recalculamos en cada GET para que el cart refleje la promo
   // vigente AHORA; `openState` decide si la tienda muestra "cerrado".
   const nowIso = new Date().toISOString();
-  const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState, { data: giftRewards }] = await Promise.all([
+  const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').order('name'),
-    sb.from('settings').select('peak_start, peak_end, base_delivery_fee, review_gift_name').eq('id', 1).single(),
+    sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
       .eq('active', true),
     loadOpenState(sb),
-    // Cupón de postre disponible (otorgado y vigente) de este cliente → aviso en la tienda.
-    sb.from('rewards').select('id').eq('phone', order.phone).eq('status', 'otorgado')
-      .or(`expires_at.is.null,expires_at.gt.${nowIso}`).limit(1),
   ]);
-
-  const gift = giftRewards && giftRewards.length > 0
-    ? { name: ((settings as { review_gift_name?: string } | null)?.review_gift_name) ?? 'Postre' }
-    : null;
 
   // `img` y `description` los agregamos al SELECT para embeberlos en el
   // catálogo — `TotalsProduct` viene de pricing y solo conoce los campos
@@ -142,6 +136,14 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   } else {
     cart = emptyCart();
   }
+
+  // Postre de regalo (Tarea 3): línea calculada a $0 si el cliente tiene un cupón
+  // 'otorgado' vigente y hay producto de regalo configurado. NO se persiste en
+  // order_items mientras es borrador (el order_item real lo inserta el canje al
+  // pagar); acá solo se muestra en el carrito de la tienda.
+  const giftLine = await giftCartLine(sb, order.phone, nowIso);
+  if (giftLine) cart.items.push(giftLine);
+  const gift = giftLine ? { name: giftLine.name } : null;
 
   // Prefill de delivery: solo si hay algo guardado (dirección o zona).
   const delivery =
