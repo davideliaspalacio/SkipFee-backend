@@ -84,6 +84,9 @@ export async function PATCH(
     return Response.json({ ok: false, error: updErr.message }, { status: 500 });
   }
 
+  // (La asignación de cocinero al pasar a 'pagado' la hace el trigger de BD
+  //  `assign_cook_on_paid` de la migración 0020, no este endpoint.)
+
   // 4. Side effect: notificación de seguimiento idempotente (pagado/cocina/
   //    ruta/entregado). No falla el endpoint si el envío falla: el estado ya
   //    cambió en BD.

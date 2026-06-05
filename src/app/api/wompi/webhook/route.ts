@@ -126,6 +126,9 @@ export async function POST(request: NextRequest) {
 
   console.log('[wompi webhook] orden pagada', { orderId: order.id });
 
+  // La asignación de cocinero la hace el trigger de BD `assign_cook_on_paid`
+  // (migración 0020) al pasar a 'pagado'.
+
   // Side effects:
   // 1. Notificar al cliente por WhatsApp
   // 2. Cerrar el flow_state del chat
