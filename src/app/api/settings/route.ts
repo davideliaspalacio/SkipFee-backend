@@ -45,6 +45,7 @@ export async function GET() {
       reviewGiftName: data.review_gift_name ?? 'Postre',
       reviewGiftExpiryDays: data.review_gift_expiry_days ?? 30,
       reviewLink: data.review_link ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
+      surveyMinDays: data.survey_min_days ?? 30,
       updatedAt: data.updated_at,
     },
   });
@@ -70,6 +71,7 @@ const patchSchema = z.object({
   reviewGiftName: z.string().min(1).max(60).optional(),
   reviewGiftExpiryDays: z.number().int().min(1).max(365).optional(),
   reviewLink: z.string().url().max(500).optional(),
+  surveyMinDays: z.number().int().min(0).max(365).optional(),
 });
 
 export async function PATCH(request: NextRequest) {
@@ -102,6 +104,7 @@ export async function PATCH(request: NextRequest) {
   if (body.reviewGiftName !== undefined) update.review_gift_name = body.reviewGiftName;
   if (body.reviewGiftExpiryDays !== undefined) update.review_gift_expiry_days = body.reviewGiftExpiryDays;
   if (body.reviewLink !== undefined) update.review_link = body.reviewLink;
+  if (body.surveyMinDays !== undefined) update.survey_min_days = body.surveyMinDays;
 
   if (Object.keys(update).length === 0) {
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });

@@ -20,7 +20,7 @@ export async function sendDeliverySurvey(opts: {
     // Respetar el switch de la UI (Configuración → Reseñas).
     const { data: settings } = await sb
       .from('settings')
-      .select('survey_enabled')
+      .select('survey_enabled, survey_min_days')
       .eq('id', 1)
       .maybeSingle();
     if ((settings?.survey_enabled ?? true) === false) return;
@@ -33,6 +33,20 @@ export async function sendDeliverySurvey(opts: {
       .eq('id', chatId)
       .maybeSingle();
     if ((chat?.status as string | undefined) === 'human') return;
+
+    // No re-encuestar al cliente si ya recibió una encuesta hace poco
+    // (survey_min_days). 0 = sin límite. Evita molestar al recurrente.
+    const minDays = (settings as { survey_min_days?: number } | null)?.survey_min_days ?? 30;
+    if (minDays > 0) {
+      const since = new Date(Date.now() - minDays * 86_400_000).toISOString();
+      const { data: recent } = await sb
+        .from('order_surveys')
+        .select('id')
+        .eq('phone', phone)
+        .gte('sent_at', since)
+        .limit(1);
+      if (recent && recent.length > 0) return;
+    }
 
     await sendSurvey({ phone, orderId });
 

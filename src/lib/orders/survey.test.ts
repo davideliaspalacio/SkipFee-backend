@@ -46,4 +46,14 @@ describe('sendDeliverySurvey', () => {
     await sendDeliverySurvey({ sb: stub.client as SupabaseClient, orderId: 'o1', phone: '573000' });
     expect(sendSurveyMock).not.toHaveBeenCalled();
   });
+
+  it('no re-encuesta si el cliente ya recibió una encuesta hace poco (survey_min_days)', async () => {
+    const stub = makeSupabaseStub({
+      settings: { single: { survey_enabled: true, survey_min_days: 30 } },
+      chats: { single: { status: 'bot' } },
+      order_surveys: { rows: [{ id: 'prev', phone: '573000', sent_at: new Date().toISOString() }] },
+    });
+    await sendDeliverySurvey({ sb: stub.client as SupabaseClient, orderId: 'o1', phone: '573000' });
+    expect(sendSurveyMock).not.toHaveBeenCalled();
+  });
 });

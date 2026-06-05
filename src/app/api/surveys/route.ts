@@ -5,27 +5,31 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * GET /api/surveys?ratingMax=3&days=14  (Tarea 3)
+ * GET /api/surveys?days=90[&ratingMax=3]  (Tarea 3)
  *
- * Encuestas YA respondidas, filtradas por nota máxima (default ≤3) dentro de una
- * ventana de días. Alimenta la alerta del panel de "calificaciones bajas" (los
- * casos que pasaron a un humano). Enriquece con el nombre del cliente por phone.
+ * Encuestas YA respondidas dentro de una ventana de días. Sin `ratingMax`
+ * devuelve TODAS (reporte de reseñas en Configuración); con `ratingMax` filtra
+ * (ej. ≤3 para los casos que pasaron a un humano). Enriquece con el nombre.
  */
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
-  const ratingMax = Number(url.searchParams.get('ratingMax') ?? '3');
-  const days = Number(url.searchParams.get('days') ?? '14');
+  const ratingMaxParam = url.searchParams.get('ratingMax');
+  const ratingMax = ratingMaxParam != null ? Number(ratingMaxParam) : null;
+  const days = Number(url.searchParams.get('days') ?? '90');
   const since = new Date(Date.now() - Math.max(1, days) * 86_400_000).toISOString();
 
   const sb = supabaseAdmin();
-  const { data, error } = await sb
+  let query = sb
     .from('order_surveys')
     .select('id, order_id, phone, rating, comment, responded_at')
     .not('rating', 'is', null)
-    .lte('rating', Number.isFinite(ratingMax) ? ratingMax : 3)
     .gte('responded_at', since)
     .order('responded_at', { ascending: false })
-    .limit(100);
+    .limit(200);
+  if (ratingMax != null && Number.isFinite(ratingMax)) {
+    query = query.lte('rating', ratingMax);
+  }
+  const { data, error } = await query;
 
   if (error) {
     console.error('[surveys GET] error', error);
