@@ -58,16 +58,19 @@ export function isPublicPath(pathname: string, method: string): boolean {
 }
 
 /**
- * Orígenes a los que respondemos CORS. Incluye los de dev y, si está
- * configurado, `STOREFRONT_ORIGIN` (el dominio de la tienda en producción).
+ * Orígenes a los que respondemos CORS. Incluye los de dev, `STOREFRONT_ORIGIN`
+ * (dominio de la tienda) y `EXTRA_CORS_ORIGINS` (lista separada por comas, p.ej.
+ * para probar el panel local contra el backend desplegado, u otros dominios).
  * Se lee de env en cada llamada (no se cachea) para no fijarlo en build.
  */
 export function allowedOrigins(): string[] {
-  const storefront = process.env.STOREFRONT_ORIGIN?.trim();
-  if (storefront && !DEV_ORIGINS.includes(storefront)) {
-    return [...DEV_ORIGINS, storefront];
-  }
-  return [...DEV_ORIGINS];
+  const fromEnv = [
+    process.env.STOREFRONT_ORIGIN,
+    ...(process.env.EXTRA_CORS_ORIGINS ?? '').split(','),
+  ]
+    .map(o => o?.trim())
+    .filter((o): o is string => !!o);
+  return [...new Set([...DEV_ORIGINS, ...fromEnv])];
 }
 
 /** True si el `Origin` del request está en la lista de permitidos. */
