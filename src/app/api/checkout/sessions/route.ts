@@ -36,6 +36,9 @@ const bodySchema = z.object({
     .object({
       address: z.string().min(1).max(500),
       zoneId: z.string().min(1),
+      lat: z.number().optional(),
+      lng: z.number().optional(),
+      persist: z.boolean().optional(), // default true: guardar la dirección en el cliente
     })
     .optional(),
 });
@@ -79,30 +82,53 @@ export async function POST(request: NextRequest) {
   }
 
   // 2. Si vino customer: upsert (matched por phone, UNIQUE).
+  //    persist=false ("Sí pero no guardar") + cliente ya existente ⇒ NO se
+  //    sobreescribe su dirección guardada (la orden igual lleva la de este pedido).
   let customerId: string | null = null;
   if (parsed.customer) {
     const email =
       parsed.customer.email && parsed.customer.email !== '' ? parsed.customer.email : null;
-    const { data: customer, error: custErr } = await sb
-      .from('customers')
-      .upsert(
-        {
-          name: parsed.customer.name,
-          phone: parsed.phone,
-          addr: parsed.delivery?.address ?? '',
-          zone_id: parsed.delivery?.zoneId ?? null,
-          email,
-          tag: 'Nuevo',
-        },
-        { onConflict: 'phone' },
-      )
-      .select('id')
-      .single();
-    if (custErr || !customer) {
-      console.error('[checkout sessions] customer upsert error', custErr);
-      return jsonWithCors({ ok: false, error: custErr?.message ?? 'customer error' }, 500);
+    const persist = parsed.delivery?.persist !== false; // default true
+
+    if (!persist) {
+      const { data: existing } = await sb
+        .from('customers')
+        .select('id')
+        .eq('phone', parsed.phone)
+        .maybeSingle();
+      if (existing) {
+        // Preservar la dirección guardada; solo refrescamos nombre/email.
+        await sb
+          .from('customers')
+          .update({ name: parsed.customer.name, email })
+          .eq('id', (existing as { id: string }).id);
+        customerId = (existing as { id: string }).id;
+      }
     }
-    customerId = (customer as { id: string }).id;
+
+    if (!customerId) {
+      // persist=true, o cliente nuevo (no hay dirección previa que preservar).
+      const { data: customer, error: custErr } = await sb
+        .from('customers')
+        .upsert(
+          {
+            name: parsed.customer.name,
+            phone: parsed.phone,
+            addr: parsed.delivery?.address ?? '',
+            zone_id: parsed.delivery?.zoneId ?? null,
+            email,
+            tag: 'Nuevo',
+          },
+          { onConflict: 'phone' },
+        )
+        .select('id')
+        .single();
+      if (custErr || !customer) {
+        console.error('[checkout sessions] customer upsert error', custErr);
+        return jsonWithCors({ ok: false, error: custErr?.message ?? 'customer error' }, 500);
+      }
+      customerId = (customer as { id: string }).id;
+    }
   }
 
   // 3. INSERT order — borrador con todo lo que vino pre-llenado.
@@ -116,10 +142,12 @@ export async function POST(request: NextRequest) {
   if (parsed.delivery) {
     insertPayload.address = parsed.delivery.address;
     insertPayload.zone_id = parsed.delivery.zoneId;
-    if (zone) {
-      insertPayload.lat = zone.lat;
-      insertPayload.lng = zone.lng;
-    }
+    // Coordenadas reales del cliente (geocode/ubicación) si vinieron; si no, el
+    // centro de la zona como fallback (para que el mapa de despachos funcione).
+    const lat = typeof parsed.delivery.lat === 'number' ? parsed.delivery.lat : zone?.lat;
+    const lng = typeof parsed.delivery.lng === 'number' ? parsed.delivery.lng : zone?.lng;
+    if (typeof lat === 'number') insertPayload.lat = lat;
+    if (typeof lng === 'number') insertPayload.lng = lng;
   }
 
   const { error } = await sb

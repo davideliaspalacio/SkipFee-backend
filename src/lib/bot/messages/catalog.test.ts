@@ -110,13 +110,14 @@ describe('catalog — regresión de textos críticos', () => {
       .toBe('Hola Ana, ¡tu pedido fue entregado! 🙌 Gracias por pedir en Bros and Subs.');
   });
 
-  it('confirmar dirección renderiza con variables', async () => {
+  it('confirmar dirección renderiza con variables (3 botones: guardar/cambiar/no guardar)', async () => {
     const m = await getMessage('direccion.confirmar');
     expect(render(m.body, { direccion: 'Cra 43A', zona: 'El Poblado', tarifa: '4.500' }))
-      .toBe('Confirmo tu entrega:\n📍 Cra 43A\n🗺️ El Poblado · domicilio $4.500\n\n¿Es correcta?');
+      .toBe('¿La dirección es correcta y deseas guardarla para futuros pedidos? 👇\n\n📍 Cra 43A\n🗺️ El Poblado · domicilio $4.500');
     expect(m.buttons).toEqual([
-      { id: 'dir_si', title: '✅ Sí, correcta' },
-      { id: 'dir_editar', title: '✏️ Editar' },
+      { id: 'dir_si_guardar', title: '✅ Sí y guardar' },
+      { id: 'dir_editar', title: '✏️ Cambiar dirección' },
+      { id: 'dir_si_no_guardar', title: '❗ Sí pero no guardar' },
     ]);
   });
 

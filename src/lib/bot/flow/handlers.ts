@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/db';
 import { sendText } from '@/lib/kapso/client';
-import { sendButtons, sendCtaUrl, sendList } from '@/lib/kapso/interactive';
+import { sendButtons, sendCtaUrl, sendList, sendLocationRequest } from '@/lib/kapso/interactive';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render, type RenderVars } from '@/lib/bot/messages/render';
@@ -10,6 +10,8 @@ import type { FlowState, FlowCustomer, FlowDelivery } from './state';
 import { emptyFlowState } from './state';
 import type { IncomingMessage } from './parser';
 import { assistOffScript } from './gemini-fallback';
+import { geocodeAddress, geocodingEnabled } from '@/lib/geo/google';
+import { resolveZoneFromLatLng } from './zones';
 
 /**
  * Handlers del bot.
@@ -312,7 +314,11 @@ export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<Flow
 }
 
 // =========================================================================
-// DIRECCIÓN — texto → zona → confirmar
+// DIRECCIÓN — texto → (geocode → zona auto) → confirmar
+//   · geocode confiable + dentro de zona → confirmar (3 botones)
+//   · geocode dudoso                     → pedir ubicación (GPS)
+//   · fuera de cobertura                 → ofrecer humano (no perder la venta)
+//   · sin geocoding configurado          → camino manual (lista de zonas)
 // =========================================================================
 
 export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowState> {
@@ -322,23 +328,47 @@ export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowSta
     return ctx.state;
   }
 
-  // Cargar zonas activas (no archivadas) para mostrarlas como lista.
+  // Sin geocoding configurado → camino manual (lista de zonas). Resiliente.
+  if (!geocodingEnabled()) {
+    return pedirZonaManual(ctx, text);
+  }
+
+  const geo = await geocodeAddress(text);
+
+  // No la ubicamos bien (sin resultados o confianza baja) → pedir ubicación GPS.
+  if (!geo || geo.confidence === 'baja') {
+    await sendCatalogLocationRequest(ctx.phone, 'direccion.pedir_ubicacion');
+    return {
+      ...ctx.state,
+      step: 'direccion_ubicacion',
+      delivery: { ...ctx.state.delivery, address: text, lat: undefined, lng: undefined, zoneId: undefined },
+    };
+  }
+
+  // Confianza alta → resolver zona por coordenadas.
+  const zoneId = await resolveZoneFromLatLng(geo.lat, geo.lng);
+  const delivery: FlowDelivery = { ...ctx.state.delivery, address: text, lat: geo.lat, lng: geo.lng };
+  if (!zoneId) return irFueraCobertura(ctx, delivery);
+  return confirmarDireccion(ctx, { ...delivery, zoneId });
+}
+
+/**
+ * Camino manual (fallback sin geocoding): muestra la lista de zonas para que el
+ * cliente elija. Mantiene compatibilidad con el flujo anterior.
+ */
+async function pedirZonaManual(ctx: HandlerContext, address: string): Promise<FlowState> {
   const { data: zones } = await supabaseAdmin()
     .from('zones')
     .select('id, name, tarifa')
     .eq('archived', false)
     .order('name');
   const zonesList = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
-
   if (zonesList.length === 0) {
     await sendCatalogText(ctx.phone, 'direccion.sin_zonas');
     return ctx.state;
   }
-
-  const next: FlowDelivery = { ...ctx.state.delivery, address: text };
-
   await sendZoneList(ctx.phone, zonesList, '[lista de zonas]');
-  return { ...ctx.state, step: 'direccion_zona', delivery: next };
+  return { ...ctx.state, step: 'direccion_zona', delivery: { ...ctx.state.delivery, address } };
 }
 
 /** Envía la lista de zonas usando el mensaje editable `direccion.pedir_zona`. */
@@ -370,6 +400,39 @@ async function sendZoneList(
   });
 }
 
+/** Pide compartir ubicación (botón nativo de WhatsApp) con el texto del catálogo. */
+async function sendCatalogLocationRequest(to: string, key: string, vars: RenderVars = {}) {
+  const m = await getMessage(key);
+  await botSendInteractive({
+    to,
+    preview: '[pedir ubicación]',
+    send: () => sendLocationRequest({ to, body: render(m.body, vars) }),
+  });
+}
+
+export async function handleDireccionUbicacion(ctx: HandlerContext): Promise<FlowState> {
+  const loc = ctx.incoming.location;
+  if (!loc) {
+    // Si en vez de ubicación mandó texto, lo reintentamos como nueva dirección.
+    const text = ctx.incoming.text?.trim();
+    if (text && text.length >= 5) return handleDireccionTexto(ctx);
+    return manejarTextoLibre({
+      ctx,
+      stepDescription: 'el bot le pidió al cliente compartir su ubicación de WhatsApp para validar la zona',
+      lastBotPrompt: '¿Me compartís tu ubicación? (botón: Compartir ubicación)',
+      reprompt: async () => {
+        await sendCatalogLocationRequest(ctx.phone, 'direccion.pedir_ubicacion');
+        return ctx.state;
+      },
+    });
+  }
+
+  const zoneId = await resolveZoneFromLatLng(loc.lat, loc.lng);
+  const delivery: FlowDelivery = { ...ctx.state.delivery, lat: loc.lat, lng: loc.lng };
+  if (!zoneId) return irFueraCobertura(ctx, delivery);
+  return confirmarDireccion(ctx, { ...delivery, zoneId });
+}
+
 export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowState> {
   const listId = ctx.incoming.listReplyId;
   if (!listId || !listId.startsWith('zone_')) {
@@ -378,7 +441,6 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
       stepDescription: 'el bot le pidió al cliente elegir una zona de la lista de cobertura',
       lastBotPrompt: '¿En qué zona queda? (lista de zonas con tarifa)',
       reprompt: async () => {
-        // Re-pedir la zona
         const { data: zones } = await supabaseAdmin()
           .from('zones')
           .select('id, name, tarifa')
@@ -397,49 +459,96 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
     .select('id, name, tarifa')
     .eq('id', zoneId)
     .maybeSingle();
-
   if (!zone) {
     await sendCatalogText(ctx.phone, 'direccion.zona_invalida');
     return ctx.state;
   }
 
-  const next: FlowDelivery = { ...ctx.state.delivery, zoneId };
+  return confirmarDireccion(ctx, { ...ctx.state.delivery, zoneId });
+}
 
+/** Carga la zona y muestra la confirmación (3 botones: guardar / cambiar / no guardar). */
+async function confirmarDireccion(ctx: HandlerContext, delivery: FlowDelivery): Promise<FlowState> {
+  const { data: zone } = await supabaseAdmin()
+    .from('zones')
+    .select('name, tarifa')
+    .eq('id', delivery.zoneId as string)
+    .maybeSingle();
   await sendCatalogButtons({
     to: ctx.phone,
     key: 'direccion.confirmar',
-    preview: '[confirmar dirección + zona]',
+    preview: '[confirmar dirección]',
     vars: {
-      direccion: next.address ?? '',
-      zona: zone.name as string,
-      tarifa: formatCop(zone.tarifa as number),
+      direccion: delivery.address ?? '',
+      zona: (zone?.name as string) ?? '',
+      tarifa: zone?.tarifa ? formatCop(zone.tarifa as number) : '',
     },
   });
-  return { ...ctx.state, step: 'direccion_confirmar', delivery: next };
+  return { ...ctx.state, step: 'direccion_confirmar', delivery };
+}
+
+/** Dirección fuera de cobertura: no se rechaza la venta, se ofrece humano. */
+async function irFueraCobertura(ctx: HandlerContext, delivery: FlowDelivery): Promise<FlowState> {
+  await sendCatalogButtons({
+    to: ctx.phone,
+    key: 'direccion.fuera_cobertura',
+    preview: '[dirección fuera de cobertura]',
+    vars: { direccion: delivery.address ?? '' },
+  });
+  return { ...ctx.state, step: 'direccion_fuera_cobertura', delivery };
 }
 
 export async function handleDireccionConfirmar(ctx: HandlerContext): Promise<FlowState> {
   const choice = ctx.incoming.buttonReplyId;
-  if (choice === 'dir_si') return enviarLinkPedido(ctx);
+  // "Sí y guardar" → guarda la dirección en el cliente (acepta también el id viejo `dir_si`).
+  if (choice === 'dir_si_guardar' || choice === 'dir_si') {
+    return enviarLinkPedido(withPersist(ctx, true));
+  }
+  // "Sí pero no guardar" → la dirección se usa solo para este pedido.
+  if (choice === 'dir_si_no_guardar') {
+    return enviarLinkPedido(withPersist(ctx, false));
+  }
   if (choice === 'dir_editar') {
     await sendCatalogText(ctx.phone, 'direccion.reeditar');
-    return { ...ctx.state, step: 'direccion_texto', delivery: { ...ctx.state.delivery, address: undefined } };
+    return {
+      ...ctx.state,
+      step: 'direccion_texto',
+      delivery: { ...ctx.state.delivery, address: undefined, lat: undefined, lng: undefined },
+    };
   }
 
   return manejarTextoLibre({
     ctx,
-    stepDescription: 'el bot mostró un resumen de dirección + zona y le pidió al cliente confirmar',
-    lastBotPrompt: '¿La dirección es correcta? (botones: Sí, correcta / Editar)',
-    reprompt: async () => {
-      const d = ctx.state.delivery ?? {};
-      await sendCatalogButtons({
-        to: ctx.phone,
-        key: 'direccion.confirmar',
-        preview: '[reenvío confirmar dirección]',
-        vars: { direccion: d.address ?? '?', zona: d.zoneId ?? '?', tarifa: '' },
-      });
-      return ctx.state;
-    },
+    stepDescription: 'el bot mostró un resumen de dirección + zona y le pidió al cliente confirmar y decidir si guardarla',
+    lastBotPrompt: '¿La dirección es correcta? (botones: Sí y guardar / Cambiar dirección / Sí pero no guardar)',
+    reprompt: () => confirmarDireccion(ctx, ctx.state.delivery ?? {}),
+  });
+}
+
+/** Devuelve una copia del ctx marcando si la dirección debe guardarse en el cliente. */
+function withPersist(ctx: HandlerContext, persist: boolean): HandlerContext {
+  return { ...ctx, state: { ...ctx.state, delivery: { ...ctx.state.delivery, persist } } };
+}
+
+export async function handleDireccionFueraCobertura(ctx: HandlerContext): Promise<FlowState> {
+  const choice = ctx.incoming.buttonReplyId;
+  if (choice === 'fuera_humano') {
+    return escalarHumano(ctx, 'dirección fuera de cobertura — el cliente pidió ayuda');
+  }
+  if (choice === 'fuera_cambiar') {
+    await sendCatalogText(ctx.phone, 'direccion.reeditar');
+    return {
+      ...ctx.state,
+      step: 'direccion_texto',
+      delivery: { ...ctx.state.delivery, address: undefined, lat: undefined, lng: undefined, zoneId: undefined },
+    };
+  }
+
+  return manejarTextoLibre({
+    ctx,
+    stepDescription: 'el bot le avisó al cliente que su dirección está fuera de cobertura y le ofreció humano o cambiar la dirección',
+    lastBotPrompt: '¿Querés que te ayude un humano o cambiar la dirección? (botones)',
+    reprompt: () => irFueraCobertura(ctx, ctx.state.delivery ?? {}),
   });
 }
 
@@ -469,7 +578,14 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
     };
   }
   if (delivery?.address && delivery?.zoneId) {
-    sessionPayload.delivery = { address: delivery.address, zoneId: delivery.zoneId };
+    sessionPayload.delivery = {
+      address: delivery.address,
+      zoneId: delivery.zoneId,
+      ...(typeof delivery.lat === 'number' && typeof delivery.lng === 'number'
+        ? { lat: delivery.lat, lng: delivery.lng }
+        : {}),
+      persist: delivery.persist !== false, // default: guardar (compat recurrente)
+    };
   }
 
   let url: string | null = null;
@@ -510,6 +626,164 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
   });
 
   return { ...ctx.state, step: 'link_enviado', orderId };
+}
+
+// =========================================================================
+// POST-VENTA — encuesta 1–5 → reseña (postre) | humano  (Tarea 3)
+// =========================================================================
+
+interface PostventaSettings {
+  reviewGiftEnabled: boolean;
+  reviewGiftName: string;
+  reviewLink: string;
+  reviewGiftExpiryDays: number;
+}
+
+async function loadPostventaSettings(): Promise<PostventaSettings> {
+  const { data } = await supabaseAdmin()
+    .from('settings')
+    .select('review_gift_enabled, review_gift_name, review_link, review_gift_expiry_days')
+    .eq('id', 1)
+    .maybeSingle();
+  return {
+    reviewGiftEnabled: (data?.review_gift_enabled as boolean) ?? true,
+    reviewGiftName: (data?.review_gift_name as string) ?? 'Postre',
+    reviewLink: (data?.review_link as string) ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
+    reviewGiftExpiryDays: (data?.review_gift_expiry_days as number) ?? 30,
+  };
+}
+
+/**
+ * Envía la encuesta de satisfacción (lista 1–5). La usa el cron `survey-dispatch`.
+ * Las filas se arman acá (no son texto editable); el body/botón sí lo son.
+ */
+export async function sendSurvey(opts: { phone: string; orderId: string }): Promise<void> {
+  const m = await getMessage('postventa.encuesta');
+  await botSendInteractive({
+    to: opts.phone,
+    preview: '[encuesta 1–5]',
+    send: () =>
+      sendList({
+        to: opts.phone,
+        body: render(m.body),
+        buttonText: m.buttonText ?? 'Calificar',
+        sections: [
+          {
+            rows: [
+              { id: 'survey_5', title: '⭐⭐⭐⭐⭐ ¡Excelente!' },
+              { id: 'survey_4', title: '⭐⭐⭐⭐ Bueno' },
+              { id: 'survey_3', title: '⭐⭐⭐ Normal' },
+              { id: 'survey_2', title: '⭐⭐ Malo' },
+              { id: 'survey_1', title: '⭐ Muy malo' },
+            ],
+          },
+        ],
+      }),
+  });
+}
+
+export async function handlePostventaEncuesta(ctx: HandlerContext): Promise<FlowState> {
+  const listId = ctx.incoming.listReplyId;
+  const rating = listId?.startsWith('survey_') ? Number(listId.slice('survey_'.length)) : NaN;
+
+  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+    return manejarTextoLibre({
+      ctx,
+      stepDescription: 'el bot le pidió al cliente calificar su pedido del 1 al 5',
+      lastBotPrompt: 'Calificá tu pedido del 1 al 5 (lista de opciones)',
+      reprompt: async () => {
+        await sendCatalogText(ctx.phone, 'postventa.encuesta_invalida');
+        return ctx.state;
+      },
+    });
+  }
+
+  // Guardar la calificación en la encuesta del pedido.
+  const surveyOrderId = ctx.state.surveyOrderId;
+  if (surveyOrderId) {
+    await supabaseAdmin()
+      .from('order_surveys')
+      .update({ rating, responded_at: new Date().toISOString() })
+      .eq('order_id', surveyOrderId);
+  }
+
+  // Rama baja (1–3): pasar a humano. El panel marca la alerta por rating ≤3.
+  if (rating <= 3) {
+    await sendCatalogText(ctx.phone, 'postventa.gracias_baja', {
+      nombre: ctx.state.customer?.name?.split(' ')[0] ?? '',
+    });
+    await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', ctx.chatId);
+    console.log('[postventa] calificación baja → humano', { chatId: ctx.chatId, rating });
+    return { ...ctx.state, step: 'finalizado' };
+  }
+
+  // Rama alta (4–5): invitar a reseñar con link + promesa del postre.
+  const settings = await loadPostventaSettings();
+  const linkMsg = await getMessage('postventa.invitar_resena');
+  await botSendInteractive({
+    to: ctx.phone,
+    preview: '[invitar reseña + postre]',
+    send: () =>
+      sendCtaUrl({
+        to: ctx.phone,
+        body: render(linkMsg.body, { postre: settings.reviewGiftName }),
+        displayText: linkMsg.displayText ?? 'Dejar reseña ⭐',
+        url: settings.reviewLink,
+      }),
+  });
+  return { ...ctx.state, step: 'postventa_resena' };
+}
+
+export async function handlePostventaResena(ctx: HandlerContext): Promise<FlowState> {
+  const img = ctx.incoming.image;
+  if (!img) {
+    return manejarTextoLibre({
+      ctx,
+      stepDescription: 'el bot invitó al cliente a dejar una reseña y mandar el pantallazo para reclamar el postre',
+      lastBotPrompt: 'Mandanos el pantallazo de tu reseña para activar tu postre',
+      reprompt: async () => {
+        await sendCatalogText(ctx.phone, 'postventa.resena_pedir_screenshot');
+        return ctx.state;
+      },
+    });
+  }
+
+  const settings = await loadPostventaSettings();
+  if (settings.reviewGiftEnabled) {
+    await crearRewardPendiente({
+      phone: ctx.phone,
+      orderId: ctx.state.surveyOrderId,
+      screenshotUrl: img.url ?? null,
+    });
+    // A la cola humana para verificar la reseña antes de otorgar el cupón.
+    await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', ctx.chatId);
+  }
+  await sendCatalogText(ctx.phone, 'postventa.resena_recibida', { postre: settings.reviewGiftName });
+  return { ...ctx.state, step: 'finalizado' };
+}
+
+/** Crea un reward pendiente evitando duplicados (un activo por teléfono). */
+async function crearRewardPendiente(opts: {
+  phone: string;
+  orderId?: string;
+  screenshotUrl: string | null;
+}): Promise<void> {
+  const sb = supabaseAdmin();
+  const { data: activos } = await sb
+    .from('rewards')
+    .select('id')
+    .eq('phone', opts.phone)
+    .in('status', ['pendiente', 'otorgado'])
+    .limit(1);
+  if (activos && activos.length > 0) return; // ya tiene uno activo
+
+  await sb.from('rewards').insert({
+    phone: opts.phone,
+    kind: 'postre_resena',
+    status: 'pendiente',
+    order_id_origen: opts.orderId ?? null,
+    screenshot_url: opts.screenshotUrl,
+  });
 }
 
 // =========================================================================
