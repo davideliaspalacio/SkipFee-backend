@@ -10,6 +10,7 @@
 export type FlowStep =
   | 'inicio'                 // primer contacto / reinicio: saluda y ofrece pedir
   | 'menu'                   // esperando que elija pedir / hablar con humano
+  | 'pedido_en_curso'        // ya tiene un pedido sin entregar: ¿ver estado o pedir otro?
 
   // --- path RECURRENTE (datos ya en customers) ---
   | 'confirmar_recurrente'   // "¿pedimos a la misma dir?" → Sí | Cambiar dir

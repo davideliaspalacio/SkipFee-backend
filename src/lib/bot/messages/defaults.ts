@@ -144,6 +144,38 @@ const DEFS: MessageDef[] = [
     },
   }),
 
+  // ----- Pedido en curso (ofrecer estado en vez de arrancar otro) -----
+  def({
+    key: 'pedido_en_curso.preguntar',
+    category: 'conversacion',
+    step: 'pedido_en_curso',
+    kind: 'buttons',
+    label: 'Pedido en curso: ¿ver estado o pedir otro?',
+    description: 'Si el cliente ya tiene un pedido sin entregar y quiere pedir, le ofrecemos ver el estado del actual o hacer otro pedido.',
+    variables: ['numero', 'estado'],
+    default: {
+      body:
+        'Tenés un pedido en curso {{numero}}: {{estado}}\n\n' +
+        '¿Querés ver cómo va o hacer otro pedido?',
+      buttons: [
+        { id: 'pedido_ver_estado', title: '📦 Ver mi pedido' },
+        { id: 'pedido_otro', title: '🥪 Otro pedido' },
+      ],
+    },
+  }),
+  def({
+    key: 'pedido_en_curso.estado',
+    category: 'conversacion',
+    step: 'pedido_en_curso',
+    kind: 'text',
+    label: 'Pedido en curso: detalle del estado',
+    description: 'Respuesta al botón "Ver mi pedido": muestra el estado actual del pedido.',
+    variables: ['numero', 'estado'],
+    default: {
+      body: 'Tu pedido {{numero}} está {{estado}}\nTe avisamos por acá en cada paso 🛵',
+    },
+  }),
+
   // ----- Cliente recurrente -----
   def({
     key: 'recurrente.confirmar',
