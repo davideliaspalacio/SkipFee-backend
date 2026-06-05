@@ -37,6 +37,13 @@ export async function GET() {
       hours: data.hours ?? null,
       ordersPaused: data.orders_paused ?? false,
       deliveredWindowHours: data.delivered_window_hours ?? 8,
+      // Post-venta (Tarea 3)
+      surveyEnabled: data.survey_enabled ?? true,
+      surveyDelayHours: data.survey_delay_hours ?? 1,
+      reviewGiftEnabled: data.review_gift_enabled ?? true,
+      reviewGiftName: data.review_gift_name ?? 'Postre',
+      reviewGiftExpiryDays: data.review_gift_expiry_days ?? 30,
+      reviewLink: data.review_link ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
       updatedAt: data.updated_at,
     },
   });
@@ -65,6 +72,13 @@ const patchSchema = z.object({
   hours: hoursSchema.optional(),
   ordersPaused: z.boolean().optional(),
   deliveredWindowHours: z.number().int().min(1).max(72).optional(),
+  // Post-venta (Tarea 3)
+  surveyEnabled: z.boolean().optional(),
+  surveyDelayHours: z.number().int().min(0).max(72).optional(),
+  reviewGiftEnabled: z.boolean().optional(),
+  reviewGiftName: z.string().min(1).max(60).optional(),
+  reviewGiftExpiryDays: z.number().int().min(1).max(365).optional(),
+  reviewLink: z.string().url().max(500).optional(),
 });
 
 export async function PATCH(request: NextRequest) {
@@ -91,6 +105,12 @@ export async function PATCH(request: NextRequest) {
   if (body.hours !== undefined) update.hours = body.hours;
   if (body.ordersPaused !== undefined) update.orders_paused = body.ordersPaused;
   if (body.deliveredWindowHours !== undefined) update.delivered_window_hours = body.deliveredWindowHours;
+  if (body.surveyEnabled !== undefined) update.survey_enabled = body.surveyEnabled;
+  if (body.surveyDelayHours !== undefined) update.survey_delay_hours = body.surveyDelayHours;
+  if (body.reviewGiftEnabled !== undefined) update.review_gift_enabled = body.reviewGiftEnabled;
+  if (body.reviewGiftName !== undefined) update.review_gift_name = body.reviewGiftName;
+  if (body.reviewGiftExpiryDays !== undefined) update.review_gift_expiry_days = body.reviewGiftExpiryDays;
+  if (body.reviewLink !== undefined) update.review_link = body.reviewLink;
 
   if (Object.keys(update).length === 0) {
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });

@@ -79,6 +79,9 @@ export async function POST(request: NextRequest) {
   for (const chat of candidates) {
     const step = chat.flow_state?.step;
     if (!step || step === 'finalizado') continue;
+    // Los pasos de post-venta (encuesta/reseña) no se nudgean ni se resetean:
+    // el cliente puede responder horas después de entregado.
+    if (step.startsWith('postventa')) continue;
 
     // ¿Llegó al reset de 30 min? Limpiamos el flow_state silenciosamente.
     if (chat.last_message_at < resetCutoff) {
