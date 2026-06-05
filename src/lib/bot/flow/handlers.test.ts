@@ -506,12 +506,13 @@ describe('Path POST-VENTA (encuesta + reseña)', () => {
     expect(chatUpdate).toHaveBeenCalledWith({ status: 'human' });
   });
 
-  it('reseña con imagen ⇒ crea reward pendiente y pasa a humano', async () => {
+  it('reseña con imagen ⇒ crea reward pendiente y NO traba el chat (sigue en bot)', async () => {
     const rewardInsert = vi.fn();
+    const chatUpdateLocal = vi.fn();
     supabaseStub = makeSupabaseStub({
       settings: { single: { review_gift_enabled: true, review_gift_name: 'Brownie' } },
       rewards: { rows: [], onInsert: (p) => { rewardInsert(p); return {}; } },
-      chats: { onUpdate: () => ({}) },
+      chats: { onUpdate: (p) => { chatUpdateLocal(p); return {}; } },
     });
     const next = await handlePostventaResena(ctxOf(
       { image: { url: 'http://shot' } },
@@ -522,6 +523,9 @@ describe('Path POST-VENTA (encuesta + reseña)', () => {
     const r = rewardInsert.mock.calls[0][0];
     expect(r.status).toBe('pendiente');
     expect(r.screenshot_url).toBe('http://shot');
+    // El chat NO se pasa a 'human': la verificación es asíncrona (panel), el
+    // cliente puede seguir escribiendo (p. ej. hacer otro pedido).
+    expect(chatUpdateLocal).not.toHaveBeenCalled();
   });
 
   it('reseña con imagen pero ya hay reward activo ⇒ no duplica', async () => {

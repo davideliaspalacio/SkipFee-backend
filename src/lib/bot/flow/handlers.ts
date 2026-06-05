@@ -741,8 +741,10 @@ export async function handlePostventaResena(ctx: HandlerContext): Promise<FlowSt
       orderId: ctx.state.surveyOrderId,
       screenshotUrl: img.url ?? null,
     });
-    // A la cola humana para verificar la reseña antes de otorgar el cupón.
-    await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', ctx.chatId);
+    // NO pasamos el chat a 'human': la reseña la verifica el operario desde el
+    // panel (banner que busca el cupón 'pendiente' por teléfono, sin depender del
+    // estado del chat). Dejar el chat en modo bot evita trabar al cliente: puede
+    // seguir interactuando (p. ej. hacer otro pedido) mientras se verifica.
   }
   await sendCatalogText(ctx.phone, 'postventa.resena_recibida', { postre: settings.reviewGiftName });
   return { ...ctx.state, step: 'finalizado' };
