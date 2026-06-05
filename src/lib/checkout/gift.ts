@@ -10,8 +10,8 @@ import type { SupabaseClient } from '@supabase/supabase-js';
  *
  * Es una línea CALCULADA: no se persiste en `order_items` mientras el pedido es
  * borrador (así no se mezcla con el carrito que edita el cliente). El order_item
- * real se inserta al pagar (`redeemRewardForOrder`), para que la cocina lo vea en
- * el kanban.
+ * real lo inserta `redeemRewardForOrder` cuando el pedido entra al kanban (estado
+ * 'nuevo') o al pagar, para que la cocina lo vea como un ítem más.
  */
 export interface GiftCartLine {
   productId: string;

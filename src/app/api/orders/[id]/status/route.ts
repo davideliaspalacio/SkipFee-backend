@@ -99,9 +99,10 @@ export async function PATCH(
       ? { ok: false, error: result.error }
       : null;
 
-  // 5. Post-venta (Tarea 3): al pagar, canjear (si hay) el cupón de postre
-  //    vigente del cliente en este pedido. Idempotente por pedido.
-  if (newStatus === 'pagado') {
+  // 5. Post-venta (Tarea 3): canjear (si hay) el cupón de postre vigente del
+  //    cliente en este pedido apenas entra al kanban ('nuevo') o al pagar.
+  //    Idempotente por pedido (no duplica si ya se canjeó al crearlo).
+  if (newStatus === 'nuevo' || newStatus === 'pagado') {
     await redeemRewardForOrder({ sb, orderId: id, phone: (order as { phone: string }).phone });
   }
 

@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
 import { serializeOrder } from '@/lib/serializers';
+import { redeemRewardForOrder } from '@/lib/orders/rewards';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -275,6 +276,12 @@ export async function POST(request: NextRequest) {
     console.error('[orders] order_items insert error', itemsErr);
     return Response.json({ ok: false, error: itemsErr.message }, { status: 500 });
   }
+
+  // 5b. Post-venta (Tarea 3): si el cliente tiene un cupón de postre vigente, se
+  //     canjea apenas el pedido entra al kanban (estado 'nuevo') y se agrega el
+  //     postre como order_item $0 → la cocina lo ve enseguida. Idempotente por
+  //     pedido; no lanza (si falla, el pedido ya quedó creado).
+  await redeemRewardForOrder({ sb, orderId: order.id, phone: parsed.customer.phone });
 
   // 6. Mock payment link (se reemplaza por checkout.wompi.co real cuando llegue cuenta)
   const origin = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
