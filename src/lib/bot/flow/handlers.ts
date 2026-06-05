@@ -1,6 +1,6 @@
 import { supabaseAdmin } from '@/lib/db';
 import { sendText } from '@/lib/kapso/client';
-import { sendButtons, sendCtaUrl, sendList, sendLocationRequest } from '@/lib/kapso/interactive';
+import { sendButtons, sendCtaUrl, sendList } from '@/lib/kapso/interactive';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render, type RenderVars } from '@/lib/bot/messages/render';
@@ -315,10 +315,9 @@ export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<Flow
 
 // =========================================================================
 // DIRECCIÓN — texto → (geocode → zona auto) → confirmar
-//   · geocode confiable + dentro de zona → confirmar (3 botones)
-//   · geocode dudoso                     → pedir ubicación (GPS)
-//   · fuera de cobertura                 → ofrecer humano (no perder la venta)
-//   · sin geocoding configurado          → camino manual (lista de zonas)
+//   · geocode confiable + dentro de zona  → confirmar (3 botones)
+//   · geocode confiable + fuera de zona   → humano (si hay polígonos dibujados)
+//   · geocode dudoso / sin polígonos / sin geocoding → elegir zona de la lista
 // =========================================================================
 
 export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowState> {
@@ -328,35 +327,41 @@ export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowSta
     return ctx.state;
   }
 
-  // Sin geocoding configurado → camino manual (lista de zonas). Resiliente.
+  // Sin geocoding configurado → selección manual de zona. Resiliente.
   if (!geocodingEnabled()) {
     return pedirZonaManual(ctx, text);
   }
 
   const geo = await geocodeAddress(text);
 
-  // No la ubicamos bien (sin resultados o confianza baja) → pedir ubicación GPS.
+  // No la ubicamos bien (sin resultados / baja confianza) → que elija a mano.
   if (!geo || geo.confidence === 'baja') {
-    await sendCatalogLocationRequest(ctx.phone, 'direccion.pedir_ubicacion');
-    return {
-      ...ctx.state,
-      step: 'direccion_ubicacion',
-      delivery: { ...ctx.state.delivery, address: text, lat: undefined, lng: undefined, zoneId: undefined },
-    };
+    return pedirZonaManual(ctx, text);
   }
 
   // Confianza alta → resolver zona por coordenadas.
-  const zoneId = await resolveZoneFromLatLng(geo.lat, geo.lng);
-  const delivery: FlowDelivery = { ...ctx.state.delivery, address: text, lat: geo.lat, lng: geo.lng };
-  if (!zoneId) return irFueraCobertura(ctx, delivery);
-  return confirmarDireccion(ctx, { ...delivery, zoneId });
+  const { zoneId, configured } = await resolveZoneFromLatLng(geo.lat, geo.lng);
+  const coords = { lat: geo.lat, lng: geo.lng };
+  if (zoneId) {
+    return confirmarDireccion(ctx, { ...ctx.state.delivery, address: text, ...coords, zoneId });
+  }
+  // Hay polígonos dibujados y el punto cae fuera → no perdemos la venta: humano.
+  if (configured) {
+    return irFueraCobertura(ctx, { ...ctx.state.delivery, address: text, ...coords });
+  }
+  // Aún no hay polígonos configurados → que elija la zona de la lista.
+  return pedirZonaManual(ctx, text, coords);
 }
 
 /**
  * Camino manual (fallback sin geocoding): muestra la lista de zonas para que el
  * cliente elija. Mantiene compatibilidad con el flujo anterior.
  */
-async function pedirZonaManual(ctx: HandlerContext, address: string): Promise<FlowState> {
+async function pedirZonaManual(
+  ctx: HandlerContext,
+  address: string,
+  coords?: { lat: number; lng: number },
+): Promise<FlowState> {
   const { data: zones } = await supabaseAdmin()
     .from('zones')
     .select('id, name, tarifa')
@@ -368,7 +373,11 @@ async function pedirZonaManual(ctx: HandlerContext, address: string): Promise<Fl
     return ctx.state;
   }
   await sendZoneList(ctx.phone, zonesList, '[lista de zonas]');
-  return { ...ctx.state, step: 'direccion_zona', delivery: { ...ctx.state.delivery, address } };
+  return {
+    ...ctx.state,
+    step: 'direccion_zona',
+    delivery: { ...ctx.state.delivery, address, ...(coords ?? {}) },
+  };
 }
 
 /** Envía la lista de zonas usando el mensaje editable `direccion.pedir_zona`. */
@@ -398,39 +407,6 @@ async function sendZoneList(
         ],
       }),
   });
-}
-
-/** Pide compartir ubicación (botón nativo de WhatsApp) con el texto del catálogo. */
-async function sendCatalogLocationRequest(to: string, key: string, vars: RenderVars = {}) {
-  const m = await getMessage(key);
-  await botSendInteractive({
-    to,
-    preview: '[pedir ubicación]',
-    send: () => sendLocationRequest({ to, body: render(m.body, vars) }),
-  });
-}
-
-export async function handleDireccionUbicacion(ctx: HandlerContext): Promise<FlowState> {
-  const loc = ctx.incoming.location;
-  if (!loc) {
-    // Si en vez de ubicación mandó texto, lo reintentamos como nueva dirección.
-    const text = ctx.incoming.text?.trim();
-    if (text && text.length >= 5) return handleDireccionTexto(ctx);
-    return manejarTextoLibre({
-      ctx,
-      stepDescription: 'el bot le pidió al cliente compartir su ubicación de WhatsApp para validar la zona',
-      lastBotPrompt: '¿Me compartís tu ubicación? (botón: Compartir ubicación)',
-      reprompt: async () => {
-        await sendCatalogLocationRequest(ctx.phone, 'direccion.pedir_ubicacion');
-        return ctx.state;
-      },
-    });
-  }
-
-  const zoneId = await resolveZoneFromLatLng(loc.lat, loc.lng);
-  const delivery: FlowDelivery = { ...ctx.state.delivery, lat: loc.lat, lng: loc.lng };
-  if (!zoneId) return irFueraCobertura(ctx, delivery);
-  return confirmarDireccion(ctx, { ...delivery, zoneId });
 }
 
 export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowState> {

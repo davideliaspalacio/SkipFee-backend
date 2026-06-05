@@ -7,12 +7,15 @@ import { resolveZone, type ZoneCoverage } from '@/lib/geo/polygon';
  * delega en `resolveZone` (point-in-polygon + respaldo por radio).
  * Reemplaza el viejo enfoque de bounding-boxes hardcodeadas.
  */
-export async function resolveZoneFromLatLng(lat: number, lng: number): Promise<string | null> {
+export async function resolveZoneFromLatLng(
+  lat: number,
+  lng: number,
+): Promise<{ zoneId: string | null; configured: boolean }> {
   const { data, error } = await supabaseAdmin()
     .from('zones')
     .select('id, lat, lng, coverage, coverage_radius_m')
     .eq('archived', false);
-  if (error || !data) return null;
+  if (error || !data) return { zoneId: null, configured: false };
 
   const zones: ZoneCoverage[] = data.map(z => ({
     id: z.id as string,
@@ -22,5 +25,9 @@ export async function resolveZoneFromLatLng(lat: number, lng: number): Promise<s
     coverageRadiusM: (z.coverage_radius_m as number | null) ?? null,
   }));
 
-  return resolveZone({ lat, lng }, zones);
+  // ¿Hay al menos una zona con cobertura definida (polígono o radio de respaldo)?
+  const configured = zones.some(
+    z => (z.coverage != null && z.coverage.length >= 3) || (z.coverageRadiusM != null && z.coverageRadiusM > 0),
+  );
+  return { zoneId: resolveZone({ lat, lng }, zones), configured };
 }

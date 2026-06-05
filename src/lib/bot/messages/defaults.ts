@@ -356,20 +356,6 @@ const DEFS: MessageDef[] = [
     default: { body: '¿Cuál es tu *nueva dirección*? _(Ej: Cra 43A #5-15, apto 502)_' },
   }),
   def({
-    key: 'direccion.pedir_ubicacion',
-    category: 'conversacion',
-    step: 'direccion_ubicacion',
-    kind: 'text',
-    label: 'Pedir ubicación (GPS)',
-    description: 'Se envía con un botón de "Compartir ubicación" cuando no logramos ubicar bien la dirección escrita.',
-    variables: [],
-    default: {
-      body:
-        'Para ubicarte bien y confirmar que llegamos a tu zona, ¿me compartís tu *ubicación*? 📍\n' +
-        'Tocá el botón de abajo 👇',
-    },
-  }),
-  def({
     key: 'direccion.fuera_cobertura',
     category: 'conversacion',
     step: 'direccion_fuera_cobertura',
@@ -553,15 +539,6 @@ const DEFS: MessageDef[] = [
     label: 'Recordatorio: confirmar dirección',
     variables: [],
     default: { body: '¿Confirmás la dirección? Tocá uno de los botones del último mensaje.' },
-  }),
-  def({
-    key: 'nudge.direccion_ubicacion',
-    category: 'recordatorio',
-    step: 'direccion_ubicacion',
-    kind: 'text',
-    label: 'Recordatorio: compartir ubicación',
-    variables: [],
-    default: { body: '¿Seguís ahí? Compartime tu ubicación 📍 para confirmar que llegamos a tu zona.' },
   }),
   def({
     key: 'nudge.direccion_fuera_cobertura',
