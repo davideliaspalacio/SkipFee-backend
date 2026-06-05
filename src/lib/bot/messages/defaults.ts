@@ -369,7 +369,7 @@ const DEFS: MessageDef[] = [
         '📍 {{direccion}}\n\n' +
         'Pero no te quedes con el antojo: ¿querés que te ayude una persona o probás con otra dirección?',
       buttons: [
-        { id: 'fuera_humano', title: '🙋 Hablar con alguien' },
+        { id: 'fuera_humano', title: '🙋 Necesito ayuda' },
         { id: 'fuera_cambiar', title: '✏️ Otra dirección' },
       ],
     },

@@ -127,3 +127,24 @@ describe('catalog — regresión de textos críticos', () => {
     expect(m.body).toContain('Armá tu pedido en nuestra tienda');
   });
 });
+
+describe('catálogo — límites de WhatsApp en los defaults', () => {
+  // WhatsApp/Kapso rechaza títulos de botón > 20 chars (los emojis subrogados
+  // cuentan como 2). Este test evita que un default rompa el envío en runtime.
+  const BTN_MAX = 20;
+  it('todo título de botón, botón de lista y CTA respeta ≤20 caracteres', () => {
+    const offenders: string[] = [];
+    for (const def of MESSAGE_DEFS_LIST) {
+      for (const b of def.default.buttons ?? []) {
+        if (b.title.length > BTN_MAX) offenders.push(`${def.key} botón "${b.title}" (${b.title.length})`);
+      }
+      if (def.default.buttonText && def.default.buttonText.length > BTN_MAX) {
+        offenders.push(`${def.key} buttonText "${def.default.buttonText}" (${def.default.buttonText.length})`);
+      }
+      if (def.default.displayText && def.default.displayText.length > BTN_MAX) {
+        offenders.push(`${def.key} displayText "${def.default.displayText}" (${def.default.displayText.length})`);
+      }
+    }
+    expect(offenders, offenders.join(' · ')).toEqual([]);
+  });
+});
