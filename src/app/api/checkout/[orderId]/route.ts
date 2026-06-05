@@ -87,15 +87,23 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   // Catálogo + zonas + settings + promos activas + estado de operación (todo en paralelo).
   // Las promos las recalculamos en cada GET para que el cart refleje la promo
   // vigente AHORA; `openState` decide si la tienda muestra "cerrado".
-  const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState] = await Promise.all([
+  const nowIso = new Date().toISOString();
+  const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState, { data: giftRewards }] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').order('name'),
-    sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
+    sb.from('settings').select('peak_start, peak_end, base_delivery_fee, review_gift_name').eq('id', 1).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
       .eq('active', true),
     loadOpenState(sb),
+    // Cupón de postre disponible (otorgado y vigente) de este cliente → aviso en la tienda.
+    sb.from('rewards').select('id').eq('phone', order.phone).eq('status', 'otorgado')
+      .or(`expires_at.is.null,expires_at.gt.${nowIso}`).limit(1),
   ]);
+
+  const gift = giftRewards && giftRewards.length > 0
+    ? { name: ((settings as { review_gift_name?: string } | null)?.review_gift_name) ?? 'Postre' }
+    : null;
 
   // `img` y `description` los agregamos al SELECT para embeberlos en el
   // catálogo — `TotalsProduct` viene de pricing y solo conoce los campos
@@ -157,6 +165,8 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
       // volvió la orden a `borrador`), el frontend usa esto para mostrarle
       // el motivo y ofrecerle reintentar con otra tarjeta/método.
       wompiStatusMessage: order.wompi_status_message ?? null,
+      // Postre de regalo disponible (cupón vigente) → la tienda muestra el aviso.
+      gift,
     },
     catalog: buildCatalog(
       productList.map(p => ({

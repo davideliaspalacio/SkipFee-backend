@@ -113,6 +113,39 @@ describe('GET /api/checkout/:orderId', () => {
     expect(body.order.customer).toBeNull();
   });
 
+  it('cliente con cupón de postre otorgado ⇒ order.gift con el nombre del regalo', async () => {
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    const order = {
+      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
+      customer: { name: 'Ana', email: null }, items: [],
+    };
+    supabaseStub = makeSupabaseStub({
+      orders: { single: order },
+      products: { rows: PRODUCTS },
+      zones: { rows: ZONES },
+      settings: { single: { ...SETTINGS, review_gift_name: 'Brownie' } },
+      rewards: { rows: [{ id: 'rw1', phone: '573136913188', status: 'otorgado' }] },
+    });
+    const res = await GET(getRequest(url('o1', '573136913188')), asyncParams({ orderId: 'o1' }));
+    const body = await res.json();
+    expect(body.status).toBe('valida');
+    expect(body.order.gift).toEqual({ name: 'Brownie' });
+  });
+
+  it('cliente sin cupón otorgado ⇒ order.gift es null', async () => {
+    const future = new Date(Date.now() + 60 * 60_000).toISOString();
+    const order = {
+      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      address: 'Cra 1', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
+      customer: { name: 'Ana', email: null }, items: [],
+    };
+    supabaseStub = makeSupabaseStub(baseTables(order));
+    const res = await GET(getRequest(url('o1', '573136913188')), asyncParams({ orderId: 'o1' }));
+    const body = await res.json();
+    expect(body.order.gift).toBeNull();
+  });
+
   it('borrador vencida ⇒ 200 status expirada (sin order)', async () => {
     const past = new Date(Date.now() - 60_000).toISOString();
     const order = { id: 'o1', phone: 'x', status: 'borrador', expires_at: past, items: [] };
