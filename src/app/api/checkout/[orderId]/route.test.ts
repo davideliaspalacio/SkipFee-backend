@@ -108,7 +108,7 @@ describe('GET /api/checkout/:orderId', () => {
     const res = await GET(getRequest(url('o1')), asyncParams({ orderId: 'o1' }));
     const body = await res.json();
     expect(body.status).toBe('valida');
-    expect(body.order.cart).toEqual({ items: [], subtotal: 0, discount: 0, delivery: 0, peakSurcharge: 0, total: 0, appliedPromo: null });
+    expect(body.order.cart).toEqual({ items: [], subtotal: 0, discount: 0, delivery: 0, peakSurcharge: 0, tip: 0, tipPercent: null, total: 0, appliedPromo: null });
     expect(body.order.delivery).toBeNull();
     expect(body.order.customer).toBeNull();
   });

@@ -38,6 +38,8 @@ describe('emptyCart', () => {
       discount: 0,
       delivery: 0,
       peakSurcharge: 0,
+      tip: 0,
+      tipPercent: null,
       total: 0,
       appliedPromo: null,
     });

@@ -43,6 +43,8 @@ type OrderRow = {
   note: string | null;
   wompi_status_message: string | null;
   order_number: number | null;
+  tip: number | null;
+  tip_percent: number | null;
   customer: { name: string; email: string | null } | { name: string; email: string | null }[] | null;
   items: OrderItemRow[] | null;
 };
@@ -59,7 +61,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   const { data: order } = (await sb
     .from('orders')
     .select(
-      `id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message, order_number,
+      `id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message, order_number, tip, tip_percent,
        customer:customers(name, email),
        items:order_items(qty, price_at_order, product:products(id, name))`,
     )
@@ -130,7 +132,9 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
       discount: totals.discount,
       delivery: totals.delivery,
       peakSurcharge: totals.peakSurcharge,
-      total: totals.total,
+      tip: order.tip ?? 0,
+      tipPercent: order.tip_percent ?? null,
+      total: totals.total + (order.tip ?? 0),
       appliedPromo: totals.appliedPromo,
     };
   } else {

@@ -42,6 +42,10 @@ const bodySchema = z.object({
       lng: z.number().optional(),
     })
     .optional(),
+  // Propina (solo tienda web): tipPercent (p. ej. 10) se calcula sobre el subtotal;
+  // si no, tip es un monto custom. Default: sin propina.
+  tipPercent: z.number().int().min(0).max(100).optional(),
+  tip: z.number().int().min(0).max(1_000_000).optional(),
 });
 
 export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId: string }> }) {
@@ -161,14 +165,21 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
   const lat = parsed.delivery?.lat ?? zone?.lat ?? null;
   const lng = parsed.delivery?.lng ?? zone?.lng ?? null;
 
-  // `total` ya incluye el descuento (computeOrderTotals lo restó). Persistimos
-  // también `discount` y `promo_id` para que el GET checkout pueda devolver el
-  // mismo desglose y para auditoría/reportes. Si no aplicó ninguna promo,
-  // promo_id queda en null y discount en 0.
+  // Propina (Tarea: 10% / custom, solo tienda web): el 10% se calcula sobre el
+  // subtotal (la comida); si no, se usa el monto custom. Se suma al total.
+  const tipPercent = parsed.tipPercent && parsed.tipPercent > 0 ? parsed.tipPercent : null;
+  const tip = tipPercent ? Math.round((totals.subtotal * tipPercent) / 100) : (parsed.tip ?? 0);
+  const totalConPropina = totals.total + tip;
+
+  // `total` ya incluye el descuento (computeOrderTotals lo restó) y la propina.
+  // Persistimos discount/promo_id/tip/tip_percent para que el GET devuelva el
+  // mismo desglose y para auditoría/reportes.
   const update: Record<string, unknown> = {
-    total: totals.total,
+    total: totalConPropina,
     discount: totals.discount,
     promo_id: totals.appliedPromo?.id ?? null,
+    tip,
+    tip_percent: tipPercent,
   };
   if (parsed.delivery) {
     if (parsed.delivery.address !== undefined) update.address = parsed.delivery.address;
@@ -206,7 +217,9 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
       discount: totals.discount,
       delivery: totals.delivery,
       peakSurcharge: totals.peakSurcharge,
-      total: totals.total,
+      tip,
+      tipPercent,
+      total: totalConPropina,
       appliedPromo: totals.appliedPromo,
     },
     delivery: deliveryOut,
