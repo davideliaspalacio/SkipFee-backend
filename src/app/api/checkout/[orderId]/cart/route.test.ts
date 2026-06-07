@@ -202,6 +202,47 @@ describe('PUT /api/checkout/:orderId/cart', () => {
     expect(body.errors).toBeTruthy();
   });
 
+  it('propina 10% ⇒ se calcula sobre el subtotal y se suma al total', async () => {
+    supabaseStub = makeSupabaseStub(tablesFor(validBorrador()));
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }], tipPercent: 10 }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // subtotal 28000 → tip 2800; + domicilio 4500 → total 35300
+    expect(body.cart.tip).toBe(2800);
+    expect(body.cart.tipPercent).toBe(10);
+    expect(body.cart.total).toBe(28000 + 4500 + 2800);
+    const [upd] = updateCapture.mock.calls[0];
+    expect(upd.tip).toBe(2800);
+    expect(upd.tip_percent).toBe(10);
+    expect(upd.total).toBe(35300);
+  });
+
+  it('propina custom (monto) ⇒ se suma tal cual y tip_percent es null', async () => {
+    supabaseStub = makeSupabaseStub(tablesFor(validBorrador()));
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }], tip: 3000 }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    const body = await res.json();
+    expect(body.cart.tip).toBe(3000);
+    expect(body.cart.tipPercent).toBeNull();
+    expect(body.cart.total).toBe(28000 + 4500 + 3000);
+  });
+
+  it('sin propina ⇒ tip 0 y total sin cambios', async () => {
+    supabaseStub = makeSupabaseStub(tablesFor(validBorrador()));
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }] }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    const body = await res.json();
+    expect(body.cart.tip).toBe(0);
+    expect(body.cart.total).toBe(28000 + 4500);
+  });
+
   it('OPTIONS responde 204', async () => {
     const res = await OPTIONS();
     expect(res.status).toBe(204);

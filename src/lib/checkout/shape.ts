@@ -60,6 +60,10 @@ export interface Cart {
   discount: number;
   delivery: number;
   peakSurcharge: number;
+  /** Propina elegida por el cliente (COP). 0 si no puso. Ya incluida en `total`. */
+  tip: number;
+  /** % de propina elegido (p. ej. 10) para recordar el modo del selector; null si custom/none. */
+  tipPercent: number | null;
   total: number;
   /** Promo aplicada al carrito en este recálculo. `null` si ninguna aplica. */
   appliedPromo: CartAppliedPromo | null;
@@ -76,7 +80,7 @@ export interface CartAppliedPromo {
 
 /** Carrito vacío (cliente aún no agregó nada). */
 export function emptyCart(): Cart {
-  return { items: [], subtotal: 0, discount: 0, delivery: 0, peakSurcharge: 0, total: 0, appliedPromo: null };
+  return { items: [], subtotal: 0, discount: 0, delivery: 0, peakSurcharge: 0, tip: 0, tipPercent: null, total: 0, appliedPromo: null };
 }
 
 export type CheckoutStatus = 'valida' | 'expirada' | 'no_encontrada' | 'ya_usada';
