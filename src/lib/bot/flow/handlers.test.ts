@@ -34,6 +34,7 @@ vi.mock('./gemini-fallback', () => ({
 import {
   enviarLinkPedido,
   handleMenu,
+  handlePedidoEnCurso,
   iniciarPedido,
   handleRegistroNombre,
   handleRegistroEmail,
@@ -120,6 +121,45 @@ describe('iniciarPedido — decide nuevo vs recurrente', () => {
     expect(opts.body).toContain('Edison');
     expect(opts.body).toContain('Cra 43A #5-15');
     expect(opts.buttons).toHaveLength(2); // Sí / Cambiar dir
+  });
+});
+
+describe('pedido en curso — ofrecer estado vs nuevo pedido (Tarea 3)', () => {
+  it('cliente con pedido sin entregar ⇒ ofrece ver estado / otro pedido (no arranca pedido)', async () => {
+    supabaseStub = makeSupabaseStub({
+      orders: { rows: [{ phone: '573136913188', order_number: 85, status: 'cocina' }] },
+      customers: { single: null },
+    });
+    const next = await iniciarPedido(ctxOf({ buttonReplyId: 'menu_pedir' }));
+    expect(next.step).toBe('pedido_en_curso');
+    expect(sendButtonsMock).toHaveBeenCalledTimes(1);
+    const opts = sendButtonsMock.mock.calls[0][0];
+    expect(opts.body).toContain('#85');
+    expect(opts.buttons.map((b: { id: string }) => b.id)).toEqual(['pedido_ver_estado', 'pedido_otro']);
+  });
+
+  it('"Ver mi pedido" ⇒ muestra el estado actual y termina', async () => {
+    supabaseStub = makeSupabaseStub({ orders: { rows: [{ phone: '573136913188', order_number: 85, status: 'ruta' }] } });
+    const next = await handlePedidoEnCurso(ctxOf({ buttonReplyId: 'pedido_ver_estado' }, { step: 'pedido_en_curso' }));
+    expect(next.step).toBe('finalizado');
+    expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('#85'));
+    expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('camino'));
+  });
+
+  it('"Otro pedido" ⇒ arranca el flujo de pedido sin volver a preguntar', async () => {
+    supabaseStub = makeSupabaseStub({
+      orders: { rows: [{ phone: '573136913188', order_number: 85, status: 'cocina' }] },
+      customers: { single: null },
+    });
+    const next = await handlePedidoEnCurso(ctxOf({ buttonReplyId: 'pedido_otro' }, { step: 'pedido_en_curso' }));
+    expect(next.step).toBe('registro_nombre');
+    expect(sendButtonsMock).not.toHaveBeenCalled(); // no volvió a ofrecer "pedido en curso"
+  });
+
+  it('sin pedido en curso ⇒ arranca el flujo normal', async () => {
+    supabaseStub = makeSupabaseStub({ orders: { rows: [] }, customers: { single: null } });
+    const next = await iniciarPedido(ctxOf({ buttonReplyId: 'menu_pedir' }));
+    expect(next.step).toBe('registro_nombre');
   });
 });
 

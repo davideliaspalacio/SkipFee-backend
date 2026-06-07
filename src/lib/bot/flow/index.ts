@@ -10,6 +10,7 @@ import { detectPedirIntent } from './intent';
 import {
   handleEntrada,
   handleMenu,
+  handlePedidoEnCurso,
   handleConfirmarRecurrente,
   handleRegistroNombre,
   handleRegistroEmail,
@@ -112,11 +113,14 @@ export async function routeFlow(ctx: HandlerContext): Promise<FlowState> {
 
   // 2. Intención de pedir desde cualquier step → arranca/reanuda el flujo
   //    de pedido. Cubre el texto exacto del botón de "carrito vencido".
-  if (detectPedirIntent(text, await getKeywords('keywords.pedir'))) return iniciarPedido(ctx);
+  //    (en 'pedido_en_curso' NO interceptamos: ese step maneja sus propios
+  //    botones/texto; si interceptáramos, "otro pedido" por texto haría loop.)
+  if (ctx.state.step !== 'pedido_en_curso' && detectPedirIntent(text, await getKeywords('keywords.pedir'))) return iniciarPedido(ctx);
 
   // 3. Dispatch por step
   switch (ctx.state.step) {
     case 'menu':                 return handleMenu(ctx);
+    case 'pedido_en_curso':      return handlePedidoEnCurso(ctx);
     case 'confirmar_recurrente': return handleConfirmarRecurrente(ctx);
     case 'registro_nombre':      return handleRegistroNombre(ctx);
     case 'registro_email':       return handleRegistroEmail(ctx);

@@ -170,7 +170,24 @@ export async function handleMenu(ctx: HandlerContext): Promise<FlowState> {
  * - Recurrente con datos completos → confirmar_recurrente (atajo)
  * - Nuevo o con datos incompletos → registro_intro (full flow)
  */
-export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
+export async function iniciarPedido(
+  ctx: HandlerContext,
+  opts: { skipActiveCheck?: boolean } = {},
+): Promise<FlowState> {
+  // Si el cliente ya tiene un pedido SIN entregar, ofrecer ver su estado en vez
+  // de arrancar otro directo. (skipActiveCheck: cuando ya eligió "Otro pedido".)
+  if (!opts.skipActiveCheck) {
+    const activo = await pedidoEnCurso(ctx.phone);
+    if (activo) {
+      await sendCatalogButtons({
+        to: ctx.phone,
+        key: 'pedido_en_curso.preguntar',
+        vars: { numero: numeroPedido(activo.order_number), estado: estadoLegible(activo.status) },
+      });
+      return { ...ctx.state, step: 'pedido_en_curso' };
+    }
+  }
+
   // Gate por horario / pausa manual: no se inician pedidos fuera de horario.
   const openState = await loadOpenState(supabaseAdmin());
   if (!openState.open) {
@@ -228,6 +245,72 @@ export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
   await sendCatalogText(ctx.phone, 'registro.intro');
   await sendCatalogText(ctx.phone, 'registro.pedir_nombre');
   return { ...ctx.state, step: 'registro_nombre', customer: {}, delivery: {} };
+}
+
+// =========================================================================
+// PEDIDO EN CURSO — el cliente ya tiene un pedido sin entregar
+// =========================================================================
+
+/** Estados de pedido que cuentan como "en curso" (no entregado, no borrador). */
+const EN_CURSO_STATUSES = ['nuevo', 'pagado', 'cocina', 'empacado', 'ruta'];
+
+/** Texto amigable del estado del pedido para el cliente. */
+function estadoLegible(status: string): string {
+  switch (status) {
+    case 'nuevo': return 'recibido, lo estamos confirmando ✅';
+    case 'pagado': return 'confirmado, va para la cocina 👨‍🍳';
+    case 'cocina': return 'en preparación 👨‍🍳';
+    case 'empacado': return 'empacado y listo 📦';
+    case 'ruta': return 'en camino 🛵';
+    default: return status;
+  }
+}
+
+function numeroPedido(orderNumber: number | null | undefined): string {
+  return orderNumber != null ? `#${orderNumber}` : '';
+}
+
+/** Pedido más reciente del cliente que aún no se entregó (o null). */
+async function pedidoEnCurso(
+  phone: string,
+): Promise<{ order_number: number | null; status: string } | null> {
+  const { data } = await supabaseAdmin()
+    .from('orders')
+    .select('order_number, status')
+    .eq('phone', phone)
+    .in('status', EN_CURSO_STATUSES)
+    .order('created_at', { ascending: false })
+    .limit(1);
+  const row = data?.[0] as { order_number: number | null; status: string } | undefined;
+  return row ?? null;
+}
+
+/**
+ * Step 'pedido_en_curso': el cliente quiso pedir pero ya tiene un pedido sin
+ * entregar. Elige ver el estado del actual o hacer otro pedido.
+ */
+export async function handlePedidoEnCurso(ctx: HandlerContext): Promise<FlowState> {
+  const choice = ctx.incoming.buttonReplyId;
+  if (choice === 'pedido_otro') return iniciarPedido(ctx, { skipActiveCheck: true });
+  if (choice === 'pedido_ver_estado') {
+    const activo = await pedidoEnCurso(ctx.phone);
+    if (!activo) {
+      // El pedido se entregó/cerró mientras tanto → arrancar pedido normal.
+      return iniciarPedido(ctx, { skipActiveCheck: true });
+    }
+    await sendCatalogText(ctx.phone, 'pedido_en_curso.estado', {
+      numero: numeroPedido(activo.order_number),
+      estado: estadoLegible(activo.status),
+    });
+    return { ...ctx.state, step: 'finalizado' };
+  }
+  // Texto libre: re-ofrecer las opciones (re-consultando el estado actual).
+  return manejarTextoLibre({
+    ctx,
+    stepDescription: 'el cliente tiene un pedido en curso; el bot le preguntó si ver el estado o hacer otro pedido',
+    lastBotPrompt: '¿Querés ver el estado de tu pedido o hacer otro? (botones)',
+    reprompt: () => iniciarPedido(ctx),
+  });
 }
 
 // =========================================================================
