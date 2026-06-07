@@ -6,34 +6,36 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/orders/stats
- * Contadores ligeros para el header del kanban:
- *   - active:         pedidos creados hoy que siguen activos (ver ACTIVE_STATUSES)
- *   - completedToday: pedidos entregados hoy
+ * Contadores ligeros para el header del kanban + el badge del sidebar:
+ *   - active:         pedidos activos AHORA (cualquier fecha, status ∈ ACTIVE_STATUSES).
+ *                     Coincide con lo que aparece en el kanban — incluye pedidos
+ *                     iniciados ayer que siguen sin entregarse.
+ *   - completedToday: pedidos entregados hoy (Bogotá).
  *
- * Una sola query trae solo `status` de los pedidos del día, agregamos en memoria.
- * Pensado para polling frecuente desde el header de Pedidos.
+ * Dos queries en paralelo, ambas devuelven solo `id` para minimizar payload.
  */
 export async function GET() {
   const sb = supabaseAdmin();
   const todayStart = startOfTodayInBogota();
 
-  const { data, error } = await sb
-    .from('orders')
-    .select('status')
-    .gte('created_at', todayStart.toISOString());
+  const [activeRes, completedRes] = await Promise.all([
+    sb.from('orders').select('id').in('status', ACTIVE_STATUSES),
+    sb
+      .from('orders')
+      .select('id')
+      .eq('status', 'entregado')
+      .gte('created_at', todayStart.toISOString()),
+  ]);
 
-  if (error) {
-    console.error('[orders/stats GET] error', error);
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  if (activeRes.error || completedRes.error) {
+    const err = activeRes.error ?? completedRes.error;
+    console.error('[orders/stats GET] error', err);
+    return Response.json({ ok: false, error: err?.message ?? 'unknown' }, { status: 500 });
   }
 
-  const rows = (data ?? []) as Array<{ status: string }>;
-  let active = 0;
-  let completedToday = 0;
-  for (const r of rows) {
-    if (r.status === 'entregado') completedToday += 1;
-    else if (ACTIVE_STATUSES.includes(r.status)) active += 1;
-  }
-
-  return Response.json({ ok: true, active, completedToday });
+  return Response.json({
+    ok: true,
+    active: activeRes.data?.length ?? 0,
+    completedToday: completedRes.data?.length ?? 0,
+  });
 }
