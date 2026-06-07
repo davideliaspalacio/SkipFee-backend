@@ -10,6 +10,8 @@ interface OrderRow {
   id: string;
   order_number: number;
   total: number;
+  tip?: number | null;
+  tip_percent?: number | null;
   status: string;
   address: string;
   phone: string;
@@ -58,6 +60,9 @@ export function serializeOrder(row: OrderRow) {
     items: itemList.join(', '),
     itemList,
     total: row.total,
+    // Propina que dejó el cliente en la tienda web (orders.tip). 0 si no dejó.
+    tip: row.tip ?? 0,
+    tipPercent: row.tip_percent ?? null,
     zone: zone?.id ?? '',
     zoneName: zone?.name ?? '',
     status: unpaid ? 'nuevo' : row.status,
