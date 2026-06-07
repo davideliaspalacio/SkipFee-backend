@@ -4,9 +4,6 @@ import { supabaseAdmin } from '@/lib/db';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-// Comisión típica pasarela (Wompi ≈ 3%) — para reportar el neto al admin.
-const COMMISSION_RATE = 0.03;
-
 interface OrderRow {
   id: string;
   total: number;
@@ -82,8 +79,7 @@ export async function GET(request: NextRequest) {
     const z = zoneById.get(o.zone_id);
     return s + (z?.tarifa ?? 0);
   }, 0);
-  const comisiones = Math.round(bruto * COMMISSION_RATE);
-  const neto = bruto - domicilios - comisiones;
+  const neto = bruto - domicilios;
   const brutoPrev = completedPrev.reduce((s, o) => s + (o.total || 0), 0);
   const variation = brutoPrev > 0 ? Math.round(((bruto - brutoPrev) / brutoPrev) * 1000) / 10 : 0;
 
@@ -170,19 +166,10 @@ export async function GET(request: NextRequest) {
   const nonConverted = Math.max(0, totalChats - closedOrders);
   const conversionRate = totalChats > 0 ? Math.round((closedOrders / totalChats) * 100) : 0;
 
-  // 8. Reviews / post-venta: aún sin integración (Google Places, encuestas).
-  // El frontend muestra MockBadge encima.
-  const reviews = {
-    ratingAvg: 4.82,
-    reviewsGoogle: 47,
-    cuponesUsados: 23,
-    postventaResponses: 142,
-  };
-
   return Response.json({
     ok: true,
     period,
-    financial: { bruto, domicilios, comisiones, neto, variation },
+    financial: { bruto, domicilios, neto, variation },
     weeklyComparison: weeklyBuckets,
     topProducts,
     zoneAnalysis,
@@ -193,6 +180,5 @@ export async function GET(request: NextRequest) {
       nonConverted,
       rate: conversionRate,
     },
-    reviews,
   });
 }
