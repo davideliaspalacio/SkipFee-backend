@@ -150,16 +150,15 @@ const DEFS: MessageDef[] = [
     category: 'conversacion',
     step: 'pedido_en_curso',
     kind: 'buttons',
-    label: 'Pedido en curso: ¿ver estado o pedir otro?',
-    description: 'Si el cliente ya tiene un pedido sin entregar y quiere pedir, le ofrecemos ver el estado del actual o hacer otro pedido.',
+    label: 'Pedido en curso: ofrecer ver el estado',
+    description: 'Si el cliente ya tiene un pedido sin entregar, le ofrecemos ver el estado del actual (no se le deja arrancar otro mientras tanto).',
     variables: ['numero', 'estado'],
     default: {
       body:
         'Tenés un pedido en curso {{numero}}: {{estado}}\n\n' +
-        '¿Querés ver cómo va o hacer otro pedido?',
+        '¿Querés ver cómo va? 👀',
       buttons: [
         { id: 'pedido_ver_estado', title: '📦 Ver mi pedido' },
-        { id: 'pedido_otro', title: '🥪 Otro pedido' },
       ],
     },
   }),

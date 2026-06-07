@@ -33,6 +33,7 @@ vi.mock('./gemini-fallback', () => ({
 
 import {
   enviarLinkPedido,
+  handleEntrada,
   handleMenu,
   handlePedidoEnCurso,
   iniciarPedido,
@@ -125,7 +126,7 @@ describe('iniciarPedido — decide nuevo vs recurrente', () => {
 });
 
 describe('pedido en curso — ofrecer estado vs nuevo pedido (Tarea 3)', () => {
-  it('cliente con pedido sin entregar ⇒ ofrece ver estado / otro pedido (no arranca pedido)', async () => {
+  it('cliente con pedido sin entregar ⇒ ofrece SOLO ver estado (no arranca pedido)', async () => {
     supabaseStub = makeSupabaseStub({
       orders: { rows: [{ phone: '573136913188', order_number: 85, status: 'cocina' }] },
       customers: { single: null },
@@ -135,7 +136,7 @@ describe('pedido en curso — ofrecer estado vs nuevo pedido (Tarea 3)', () => {
     expect(sendButtonsMock).toHaveBeenCalledTimes(1);
     const opts = sendButtonsMock.mock.calls[0][0];
     expect(opts.body).toContain('#85');
-    expect(opts.buttons.map((b: { id: string }) => b.id)).toEqual(['pedido_ver_estado', 'pedido_otro']);
+    expect(opts.buttons.map((b: { id: string }) => b.id)).toEqual(['pedido_ver_estado']);
   });
 
   it('"Ver mi pedido" ⇒ muestra el estado actual y termina', async () => {
@@ -146,14 +147,18 @@ describe('pedido en curso — ofrecer estado vs nuevo pedido (Tarea 3)', () => {
     expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('camino'));
   });
 
-  it('"Otro pedido" ⇒ arranca el flujo de pedido sin volver a preguntar', async () => {
+  it('saludo ("hola") con pedido en curso ⇒ NO ofrece "Hacer pedido", ofrece ver estado', async () => {
     supabaseStub = makeSupabaseStub({
       orders: { rows: [{ phone: '573136913188', order_number: 85, status: 'cocina' }] },
-      customers: { single: null },
+      customers: { single: { name: 'David' } },
     });
-    const next = await handlePedidoEnCurso(ctxOf({ buttonReplyId: 'pedido_otro' }, { step: 'pedido_en_curso' }));
-    expect(next.step).toBe('registro_nombre');
-    expect(sendButtonsMock).not.toHaveBeenCalled(); // no volvió a ofrecer "pedido en curso"
+    const next = await handleEntrada(ctxOf({ text: 'hola' }, { step: 'inicio' }));
+    expect(next.step).toBe('pedido_en_curso');
+    const opts = sendButtonsMock.mock.calls[0][0];
+    expect(opts.body).toContain('#85');
+    const ids = opts.buttons.map((b: { id: string }) => b.id);
+    expect(ids).toEqual(['pedido_ver_estado']);
+    expect(ids).not.toContain('menu_pedir'); // no aparece "Hacer pedido"
   });
 
   it('sin pedido en curso ⇒ arranca el flujo normal', async () => {

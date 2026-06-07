@@ -124,6 +124,23 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
     (customer?.name ?? ctx.contactName ?? '').split(' ')[0] || 'parce';
 
   const saludoMsg = await getMessage(isReturning ? 'saludo.recurrente' : 'saludo.nuevo');
+
+  // Si ya tiene un pedido SIN entregar, NO ofrecemos "Hacer pedido": saludamos
+  // y le ofrecemos ver el estado del pedido en curso (coherencia: no tiene
+  // sentido invitarlo a pedir si ya tiene uno andando).
+  const activo = await pedidoEnCurso(ctx.phone);
+  if (activo) {
+    const pregMsg = await getMessage('pedido_en_curso.preguntar');
+    const vars = { numero: numeroPedido(activo.order_number), estado: estadoLegible(activo.status) };
+    const body = `${render(saludoMsg.body, { nombre: firstName })}\n\n${render(pregMsg.body, vars)}`;
+    await botSendInteractive({
+      to: ctx.phone,
+      body,
+      send: () => sendButtons({ to: ctx.phone, body, buttons: renderButtons(pregMsg.buttons, vars) }),
+    });
+    return { ...emptyFlowState(), step: 'pedido_en_curso', isReturning };
+  }
+
   const menuMsg = await getMessage('menu.pedir');
   const body = `${render(saludoMsg.body, { nombre: firstName })}\n${render(menuMsg.body)}`;
 
@@ -170,22 +187,17 @@ export async function handleMenu(ctx: HandlerContext): Promise<FlowState> {
  * - Recurrente con datos completos → confirmar_recurrente (atajo)
  * - Nuevo o con datos incompletos → registro_intro (full flow)
  */
-export async function iniciarPedido(
-  ctx: HandlerContext,
-  opts: { skipActiveCheck?: boolean } = {},
-): Promise<FlowState> {
+export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
   // Si el cliente ya tiene un pedido SIN entregar, ofrecer ver su estado en vez
-  // de arrancar otro directo. (skipActiveCheck: cuando ya eligió "Otro pedido".)
-  if (!opts.skipActiveCheck) {
-    const activo = await pedidoEnCurso(ctx.phone);
-    if (activo) {
-      await sendCatalogButtons({
-        to: ctx.phone,
-        key: 'pedido_en_curso.preguntar',
-        vars: { numero: numeroPedido(activo.order_number), estado: estadoLegible(activo.status) },
-      });
-      return { ...ctx.state, step: 'pedido_en_curso' };
-    }
+  // de arrancar otro (no se le deja iniciar un pedido nuevo mientras tanto).
+  const activo = await pedidoEnCurso(ctx.phone);
+  if (activo) {
+    await sendCatalogButtons({
+      to: ctx.phone,
+      key: 'pedido_en_curso.preguntar',
+      vars: { numero: numeroPedido(activo.order_number), estado: estadoLegible(activo.status) },
+    });
+    return { ...ctx.state, step: 'pedido_en_curso' };
   }
 
   // Gate por horario / pausa manual: no se inician pedidos fuera de horario.
@@ -286,17 +298,15 @@ async function pedidoEnCurso(
 }
 
 /**
- * Step 'pedido_en_curso': el cliente quiso pedir pero ya tiene un pedido sin
- * entregar. Elige ver el estado del actual o hacer otro pedido.
+ * Step 'pedido_en_curso': el cliente tiene un pedido sin entregar. Solo puede
+ * ver el estado del actual (no se le ofrece arrancar otro mientras tanto).
  */
 export async function handlePedidoEnCurso(ctx: HandlerContext): Promise<FlowState> {
-  const choice = ctx.incoming.buttonReplyId;
-  if (choice === 'pedido_otro') return iniciarPedido(ctx, { skipActiveCheck: true });
-  if (choice === 'pedido_ver_estado') {
+  if (ctx.incoming.buttonReplyId === 'pedido_ver_estado') {
     const activo = await pedidoEnCurso(ctx.phone);
     if (!activo) {
       // El pedido se entregó/cerró mientras tanto → arrancar pedido normal.
-      return iniciarPedido(ctx, { skipActiveCheck: true });
+      return iniciarPedido(ctx);
     }
     await sendCatalogText(ctx.phone, 'pedido_en_curso.estado', {
       numero: numeroPedido(activo.order_number),
@@ -304,11 +314,11 @@ export async function handlePedidoEnCurso(ctx: HandlerContext): Promise<FlowStat
     });
     return { ...ctx.state, step: 'finalizado' };
   }
-  // Texto libre: re-ofrecer las opciones (re-consultando el estado actual).
+  // Texto libre: re-ofrecer ver el estado (re-consultando el pedido).
   return manejarTextoLibre({
     ctx,
-    stepDescription: 'el cliente tiene un pedido en curso; el bot le preguntó si ver el estado o hacer otro pedido',
-    lastBotPrompt: '¿Querés ver el estado de tu pedido o hacer otro? (botones)',
+    stepDescription: 'el cliente tiene un pedido en curso; el bot le ofreció ver el estado',
+    lastBotPrompt: '¿Querés ver el estado de tu pedido? (botón: Ver mi pedido)',
     reprompt: () => iniciarPedido(ctx),
   });
 }
