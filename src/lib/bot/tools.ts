@@ -110,6 +110,7 @@ export async function consultarCarta(): Promise<unknown> {
     .from('products')
     .select('id, name, price, cat')
     .eq('available', true)
+    .eq('archived', false)
     .order('cat')
     .order('name');
   if (error) return { ok: false, error: error.message };

@@ -92,7 +92,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   // vigente AHORA; `openState` decide si la tienda muestra "cerrado".
   const nowIso = new Date().toISOString();
   const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState] = await Promise.all([
-    sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).order('cat').order('name'),
+    sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).eq('archived', false).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').order('name'),
     sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
     sb.from('promotions')

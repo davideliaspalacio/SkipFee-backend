@@ -7,14 +7,15 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/products
- * Devuelve TODO el catálogo (incluyendo no-disponibles). Lo consume la
- * pantalla Catálogo del panel, donde el operario puede toggle availability.
- * Para el bot, usar /api/products/available que solo trae available=true.
+ * Devuelve el catálogo activo (incluye no-disponibles para que el operario
+ * pueda toggle availability, pero excluye archivados — esos no aparecen en
+ * ningún lado de la UI). Para el bot usar /api/products/available.
  */
 export async function GET() {
   const { data, error } = await supabaseAdmin()
     .from('products')
     .select('id, name, price, cat, sold, available, img, description')
+    .eq('archived', false)
     .order('cat')
     .order('name');
 

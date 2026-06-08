@@ -58,6 +58,7 @@ export async function GET() {
     const { data: products } = await sb
       .from('products')
       .select('id, name, price, cat, img, description, available')
+      .eq('archived', false)
       .in('id', Array.from(productIds));
     productsById = new Map(
       (products ?? []).map(p => [

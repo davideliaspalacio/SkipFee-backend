@@ -12,6 +12,7 @@ export async function GET() {
     .from('products')
     .select('id, name, price, cat')
     .eq('available', true)
+    .eq('archived', false)
     .order('cat')
     .order('name');
 

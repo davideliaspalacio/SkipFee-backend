@@ -84,11 +84,13 @@ export async function PATCH(
 
 /**
  * DELETE /api/products/:id
- * Borra el producto del catálogo. Si tenía una imagen en nuestro bucket,
- * intenta borrarla (best-effort: si falla, igual se borra el producto).
+ * Soft-delete: el producto queda en BD con `archived=true` y `available=false`,
+ * pero desaparece del catálogo admin, del menú del storefront, del bot y del
+ * selector de promociones. No borramos físicamente porque order_items.product_id
+ * apunta al producto y perderíamos el histórico de pedidos.
  *
- * No bloqueamos si el producto está referenciado por `order_items` —
- * supabase mantiene la integridad referencial (lanza error si no se puede).
+ * La imagen del bucket sí se borra (best-effort) porque ya no se va a mostrar
+ * y libera storage. Si se quiere "restaurar" después, hay que subir imagen nueva.
  */
 export async function DELETE(
   _request: NextRequest,
@@ -97,7 +99,7 @@ export async function DELETE(
   const { id } = await context.params;
   const sb = supabaseAdmin();
 
-  // 1. Buscar la imagen antes de borrar para limpiarla del bucket.
+  // 1. Buscar la imagen antes de archivar para limpiarla del bucket.
   const { data: existing } = await sb
     .from('products')
     .select('id, img')
@@ -108,13 +110,17 @@ export async function DELETE(
     return Response.json({ ok: false, error: 'Producto no encontrado' }, { status: 404 });
   }
 
-  const { error: delErr } = await sb.from('products').delete().eq('id', id);
-  if (delErr) {
-    console.error('[products DELETE] error', delErr);
-    return Response.json({ ok: false, error: delErr.message }, { status: 500 });
+  const { error: archErr } = await sb
+    .from('products')
+    .update({ archived: true, available: false, img: '' })
+    .eq('id', id);
+  if (archErr) {
+    console.error('[products DELETE] archive error', archErr);
+    return Response.json({ ok: false, error: archErr.message }, { status: 500 });
   }
 
-  // 2. Best-effort: si la imagen estaba en nuestro bucket, borrarla.
+  // 2. Best-effort: si la imagen estaba en nuestro bucket, borrarla — el
+  // producto archivado ya no la usa.
   const path = extractStoragePath(existing.img as string | null);
   if (path) {
     const { error: rmErr } = await sb.storage.from(STORAGE_BUCKET).remove([path]);

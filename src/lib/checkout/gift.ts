@@ -46,13 +46,14 @@ export async function giftCartLine(
   const productId = (settings as { review_gift_product_id?: string | null } | null)?.review_gift_product_id;
   if (!productId) return null;
 
-  // El producto debe existir (pudo haberse borrado del catálogo).
+  // El producto debe existir y NO estar archivado (un producto archivado
+  // ya no se entrega como regalo aunque siga vinculado en settings).
   const { data: product } = await sb
     .from('products')
-    .select('id, name')
+    .select('id, name, archived')
     .eq('id', productId)
     .maybeSingle();
-  if (!product) return null;
+  if (!product || (product as { archived?: boolean }).archived) return null;
 
   return {
     productId: (product as { id: string }).id,
