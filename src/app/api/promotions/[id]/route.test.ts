@@ -67,20 +67,20 @@ describe('PATCH /api/promotions/:id', () => {
 });
 
 describe('DELETE /api/promotions/:id', () => {
-  it('elimina cuando no hay pedidos asociados', async () => {
-    // Override del stub para que orders count = 0
+  it('soft-delete: marca archived=true y active=false', async () => {
     supabaseStub = makeSupabaseStub({
-      orders: { rows: [] },
-      promotions: { onDelete: () => ({}) },
+      promotions: {
+        onUpdate: (payload) => {
+          updateCapture(payload);
+          return { data: { id: 'pr1', ...(payload as object) } };
+        },
+      },
     });
     const res = await DELETE(
       new Request('http://x') as never,
       asyncParams({ id: 'pr1' }),
     );
     expect(res.status).toBe(200);
+    expect(updateCapture.mock.calls[0][0]).toEqual({ archived: true, active: false });
   });
-
-  // Nota: el test de "409 si hay pedidos" requiere stub más sofisticado de
-  // count + head:true que makeSupabaseStub no soporta out-of-the-box.
-  // Se cubrirá con integration test cuando montemos supabase-local.
 });

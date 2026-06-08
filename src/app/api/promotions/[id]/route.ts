@@ -22,6 +22,7 @@ const patchSchema = z.object({
     ends_hhmm: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   }).optional(),
   active: z.boolean().optional(),
+  archived: z.boolean().optional(),
   starts_at: z.string().datetime().nullable().optional(),
   ends_at: z.string().datetime().nullable().optional(),
 });
@@ -60,7 +61,7 @@ export async function PATCH(
     .from('promotions')
     .update(patch)
     .eq('id', id)
-    .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at, created_at, updated_at')
+    .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, archived, starts_at, ends_at, created_at, updated_at')
     .single();
 
   if (error || !data) {
@@ -72,13 +73,10 @@ export async function PATCH(
 
 /**
  * DELETE /api/promotions/:id
- * Borrado físico. Las órdenes que referenciaron esta promo conservan el
- * `discount` snapshot — el `promo_id` queda colgando (ON DELETE no es CASCADE
- * a propósito; orders.promo_id sigue siendo `text REFERENCES`, pero la
- * eliminación de la promo dejaría el FK roto).
- *
- * Por eso preferimos pausar (PATCH active=false) en la UI. Este endpoint
- * existe solo para limpieza administrativa de promos sin pedidos asociados.
+ * Soft-delete: marca la promoción como archivada (archived=true) y la desactiva
+ * (active=false). Sale del admin, del storefront y del bot, pero conserva
+ * `orders.promo_id` para no romper el FK ni el histórico. Para restaurar,
+ * PATCH archived=false.
  */
 export async function DELETE(
   _request: NextRequest,
@@ -87,27 +85,17 @@ export async function DELETE(
   const { id } = await context.params;
   const sb = supabaseAdmin();
 
-  // Bloqueamos el borrado si hay órdenes que la referencian (integridad).
-  const { count } = await sb
-    .from('orders')
-    .select('id', { count: 'exact', head: true })
-    .eq('promo_id', id);
+  const { data, error } = await sb
+    .from('promotions')
+    .update({ archived: true, active: false })
+    .eq('id', id)
+    .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, archived, starts_at, ends_at, created_at, updated_at')
+    .single();
 
-  if ((count ?? 0) > 0) {
-    return Response.json(
-      {
-        ok: false,
-        error: 'No se puede borrar: hay pedidos que usaron esta promoción. Pausala (active=false) en lugar de borrarla.',
-      },
-      { status: 409 },
-    );
+  if (error || !data) {
+    console.error('[promotions DELETE] archive error', error);
+    return Response.json({ ok: false, error: error?.message ?? 'archive error' }, { status: 500 });
   }
 
-  const { error } = await sb.from('promotions').delete().eq('id', id);
-  if (error) {
-    console.error('[promotions DELETE] error', error);
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
-  }
-
-  return Response.json({ ok: true });
+  return Response.json({ ok: true, promotion: data });
 }

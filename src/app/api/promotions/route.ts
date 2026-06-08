@@ -7,16 +7,23 @@ export const dynamic = 'force-dynamic';
 
 /**
  * GET /api/promotions
- * Lista TODAS las promociones (activas e inactivas) ordenadas por kind+nombre.
- * Es el endpoint que consume el admin para el CRUD. El storefront usa
+ * Lista promociones (activas e inactivas) ordenadas por kind+nombre.
+ * Por defecto excluye las archivadas; con `?all=1` las incluye (lo usa el
+ * panel admin para mostrar la sección de archivadas). El storefront usa
  * /api/promotions/active (filtrado + hidratado con productos).
  */
-export async function GET() {
-  const { data, error } = await supabaseAdmin()
+export async function GET(request: NextRequest) {
+  const includeArchived = new URL(request.url).searchParams.get('all') === '1';
+
+  let query = supabaseAdmin()
     .from('promotions')
-    .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at, created_at, updated_at')
+    .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, archived, starts_at, ends_at, created_at, updated_at')
     .order('kind')
     .order('name');
+
+  if (!includeArchived) query = query.eq('archived', false);
+
+  const { data, error } = await query;
 
   if (error) {
     console.error('[promotions GET] error', error);
@@ -91,7 +98,7 @@ export async function POST(request: NextRequest) {
       starts_at: parsed.starts_at ?? null,
       ends_at: parsed.ends_at ?? null,
     })
-    .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at, created_at, updated_at')
+    .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, archived, starts_at, ends_at, created_at, updated_at')
     .single();
 
   if (error || !data) {

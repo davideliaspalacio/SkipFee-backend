@@ -30,6 +30,7 @@ export async function GET() {
     .from('promotions')
     .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
     .eq('active', true)
+    .eq('archived', false)
     .or(`starts_at.is.null,starts_at.lte.${nowIso}`)
     .or(`ends_at.is.null,ends_at.gte.${nowIso}`)
     .order('kind')

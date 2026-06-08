@@ -264,6 +264,7 @@ describe('PUT /api/checkout/:orderId/cart', () => {
           min_subtotal: 0,
           config: { product_ids: ['p01'] },
           active: true,
+          archived: false,
           starts_at: null,
           ends_at: null,
         }],

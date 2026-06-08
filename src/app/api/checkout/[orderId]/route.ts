@@ -97,7 +97,8 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
     sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
-      .eq('active', true),
+      .eq('active', true)
+      .eq('archived', false),
     loadOpenState(sb),
   ]);
 

@@ -16,7 +16,7 @@ beforeEach(() => {
         {
           id: 'pr1', kind: 'weekday', name: 'Miércoles brownie', description: 'gratis',
           discount_type: 'free_item', discount_value: 0, min_subtotal: 35000,
-          config: { weekdays: [3], product_ids: ['p03'] }, active: true,
+          config: { weekdays: [3], product_ids: ['p03'] }, active: true, archived: false,
           starts_at: null, ends_at: null,
         },
       ],
@@ -32,13 +32,20 @@ beforeEach(() => {
 });
 
 describe('GET /api/promotions', () => {
-  it('lista todas las promociones', async () => {
-    const res = await GET();
+  it('lista todas las promociones (excluyendo archivadas por defecto)', async () => {
+    const res = await GET(new Request('http://localhost:3000/api/promotions') as never);
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(body.ok).toBe(true);
     expect(body.promotions).toHaveLength(1);
     expect(body.promotions[0].id).toBe('pr1');
+  });
+
+  it('?all=1 incluye archivadas', async () => {
+    const res = await GET(new Request('http://localhost:3000/api/promotions?all=1') as never);
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.ok).toBe(true);
   });
 });
 
