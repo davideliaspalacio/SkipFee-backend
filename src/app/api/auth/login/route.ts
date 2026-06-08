@@ -55,6 +55,7 @@ export async function POST(request: NextRequest) {
       user: {
         id: data.user.id,
         email: data.user.email,
+        role: (data.user.app_metadata as { role?: string } | undefined)?.role ?? null,
       },
       // Devolvemos también los tokens en el body para que el frontend
       // cross-origin los guarde en localStorage y los mande en el header

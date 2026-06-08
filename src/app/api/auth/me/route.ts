@@ -29,6 +29,7 @@ export async function GET(request: NextRequest) {
       user: {
         id: session.user.id,
         email: session.user.email,
+        role: (session.user.app_metadata as { role?: string } | undefined)?.role ?? null,
       },
     }),
     { status: 200, headers },
