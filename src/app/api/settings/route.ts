@@ -53,6 +53,8 @@ export async function GET() {
       localLat: data.local_lat,
       localLng: data.local_lng,
       localLabel: data.local_label,
+      // Categorías de productos (administradas desde Configuración → Categorías).
+      categories: data.categories ?? [],
       updatedAt: data.updated_at,
     },
   });
@@ -86,6 +88,9 @@ const patchSchema = z.object({
   localLat: z.number().min(-90).max(90).optional(),
   localLng: z.number().min(-180).max(180).optional(),
   localLabel: z.string().min(1).max(40).optional(),
+  // Categorías de productos. Lista completa (no patch parcial) — el frontend
+  // envía la lista entera al guardar para que reordenar/eliminar sea atómico.
+  categories: z.array(z.string().min(1).max(60)).max(50).optional(),
 });
 
 export async function PATCH(request: NextRequest) {
@@ -124,6 +129,11 @@ export async function PATCH(request: NextRequest) {
   if (body.localLat !== undefined) update.local_lat = body.localLat;
   if (body.localLng !== undefined) update.local_lng = body.localLng;
   if (body.localLabel !== undefined) update.local_label = body.localLabel;
+  if (body.categories !== undefined) {
+    // Dedup conservando orden — protege contra ediciones que dejen duplicados
+    // por error desde el UI.
+    update.categories = Array.from(new Set(body.categories.map(c => c.trim()).filter(Boolean)));
+  }
 
   if (Object.keys(update).length === 0) {
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });
