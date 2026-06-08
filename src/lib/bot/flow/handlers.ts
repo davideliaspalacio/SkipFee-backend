@@ -142,7 +142,7 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
   }
 
   const menuMsg = await getMessage('menu.pedir');
-  const body = `${render(saludoMsg.body, { nombre: firstName })}\n${render(menuMsg.body)}`;
+  const body = render(saludoMsg.body, { nombre: firstName });
 
   await botSendInteractive({
     to: ctx.phone,

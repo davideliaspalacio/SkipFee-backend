@@ -116,9 +116,9 @@ const DEFS: MessageDef[] = [
     step: 'inicio',
     kind: 'text',
     label: 'Saludo a cliente nuevo',
-    description: 'Primera línea del saludo cuando el número no está registrado. {{nombre}} cae a "parce" si no hay nombre.',
+    description: 'Mensaje completo del saludo cuando el número no está registrado. Se envía como cuerpo del menú inicial (junto al botón "Hacer pedido"). {{nombre}} cae a "parce" si no hay nombre.',
     variables: ['nombre'],
-    default: { body: '¡Quihubo {{nombre}}! 🥪 Soy el bot de Bros and Subs.' },
+    default: { body: '¡Quihubo {{nombre}}! 🥪 Soy el bot de Bros and Subs.\n¿Hacemos un pedido?' },
   }),
   def({
     key: 'saludo.recurrente',
@@ -126,9 +126,9 @@ const DEFS: MessageDef[] = [
     step: 'inicio',
     kind: 'text',
     label: 'Saludo a cliente recurrente',
-    description: 'Primera línea del saludo cuando el cliente ya existe.',
+    description: 'Mensaje completo del saludo cuando el cliente ya existe. Se envía como cuerpo del menú inicial (junto al botón "Hacer pedido").',
     variables: ['nombre'],
-    default: { body: '¡Quihubo {{nombre}}! 🥪 Qué bueno verte de nuevo.' },
+    default: { body: '¡Quihubo {{nombre}}! 🥪 Qué bueno verte de nuevo.\n¿Hacemos un pedido?' },
   }),
   def({
     key: 'menu.pedir',
@@ -136,7 +136,7 @@ const DEFS: MessageDef[] = [
     step: 'inicio',
     kind: 'buttons',
     label: 'Pregunta del menú + botón pedir',
-    description: 'Se envía junto al saludo y también al re-ofrecer el menú. El botón "Hacer pedido" arranca el flujo.',
+    description: 'Se envía solo cuando se re-ofrece el menú (no en el saludo inicial). El botón "Hacer pedido" arranca el flujo.',
     variables: [],
     default: {
       body: '¿Hacemos un pedido?',
