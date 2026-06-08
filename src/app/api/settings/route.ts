@@ -47,6 +47,12 @@ export async function GET() {
       reviewLink: data.review_link ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
       surveyMinDays: data.survey_min_days ?? 30,
       reviewGiftProductId: data.review_gift_product_id ?? null,
+      // Origen de los domicilios (panel Despachos). Tiene defaults para que el
+      // panel funcione aunque el dueño no haya configurado la dirección.
+      localAddress: data.local_address ?? null,
+      localLat: data.local_lat,
+      localLng: data.local_lng,
+      localLabel: data.local_label,
       updatedAt: data.updated_at,
     },
   });
@@ -75,6 +81,11 @@ const patchSchema = z.object({
   surveyMinDays: z.number().int().min(0).max(365).optional(),
   // Producto de la categoría "Regalo" que se entrega gratis. null = desvincular.
   reviewGiftProductId: z.string().min(1).max(60).nullable().optional(),
+  // Dirección del local (origen de los domicilios).
+  localAddress: z.string().max(200).nullable().optional(),
+  localLat: z.number().min(-90).max(90).optional(),
+  localLng: z.number().min(-180).max(180).optional(),
+  localLabel: z.string().min(1).max(40).optional(),
 });
 
 export async function PATCH(request: NextRequest) {
@@ -109,6 +120,10 @@ export async function PATCH(request: NextRequest) {
   if (body.reviewLink !== undefined) update.review_link = body.reviewLink;
   if (body.surveyMinDays !== undefined) update.survey_min_days = body.surveyMinDays;
   if (body.reviewGiftProductId !== undefined) update.review_gift_product_id = body.reviewGiftProductId;
+  if (body.localAddress !== undefined) update.local_address = body.localAddress;
+  if (body.localLat !== undefined) update.local_lat = body.localLat;
+  if (body.localLng !== undefined) update.local_lng = body.localLng;
+  if (body.localLabel !== undefined) update.local_label = body.localLabel;
 
   if (Object.keys(update).length === 0) {
     return Response.json({ ok: false, error: 'Nada que actualizar' }, { status: 400 });
