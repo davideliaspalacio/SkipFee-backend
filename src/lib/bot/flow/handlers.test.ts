@@ -168,6 +168,44 @@ describe('pedido en curso — ofrecer estado vs nuevo pedido (Tarea 3)', () => {
   });
 });
 
+describe('handleEntrada — reescribe ≤1h tras la entrega (otro pedido / humano)', () => {
+  it('entrega reciente y sin pedido en curso ⇒ ofrece "otro pedido" + "humano"', async () => {
+    supabaseStub = makeSupabaseStub({
+      orders: { rows: [{ phone: '573136913188', status: 'entregado', delivered_at: new Date().toISOString(), order_number: 90 }] },
+      customers: { single: { name: 'Ana' } },
+    });
+    const next = await handleEntrada(ctxOf({ text: 'hola' }, { step: 'finalizado' }));
+    expect(next.step).toBe('menu');
+    const opts = sendButtonsMock.mock.calls[0][0];
+    expect(opts.buttons.map((b: { id: string }) => b.id)).toEqual(['menu_pedir', 'menu_humano']);
+  });
+
+  it('entrega reciente PERO con pedido en curso ⇒ gana "ver estado" (no la reescritura)', async () => {
+    supabaseStub = makeSupabaseStub({
+      orders: { rows: [
+        { phone: '573136913188', status: 'cocina', order_number: 91 },
+        { phone: '573136913188', status: 'entregado', delivered_at: new Date().toISOString(), order_number: 90 },
+      ] },
+      customers: { single: { name: 'Ana' } },
+    });
+    const next = await handleEntrada(ctxOf({ text: 'hola' }, { step: 'finalizado' }));
+    expect(next.step).toBe('pedido_en_curso');
+    const ids = sendButtonsMock.mock.calls[0][0].buttons.map((b: { id: string }) => b.id);
+    expect(ids).toEqual(['pedido_ver_estado']);
+  });
+
+  it('sin entrega reciente ⇒ menú normal (solo "Hacer pedido")', async () => {
+    supabaseStub = makeSupabaseStub({
+      orders: { rows: [] },
+      customers: { single: { name: 'Ana' } },
+    });
+    const next = await handleEntrada(ctxOf({ text: 'hola' }, { step: 'finalizado' }));
+    expect(next.step).toBe('menu');
+    const ids = sendButtonsMock.mock.calls[0][0].buttons.map((b: { id: string }) => b.id);
+    expect(ids).toEqual(['menu_pedir']);
+  });
+});
+
 describe('Path RECURRENTE', () => {
   it('"Sí, igual" ⇒ enviarLinkPedido con datos del state', async () => {
     fetchMock.mockResolvedValue({

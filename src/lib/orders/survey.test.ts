@@ -56,4 +56,25 @@ describe('sendDeliverySurvey', () => {
     await sendDeliverySurvey({ sb: stub.client as SupabaseClient, orderId: 'o1', phone: '573000' });
     expect(sendSurveyMock).not.toHaveBeenCalled();
   });
+
+  it('no envía si el cliente está a mitad de otro flujo (step mid-order)', async () => {
+    const stub = makeSupabaseStub({
+      settings: { single: { survey_enabled: true } },
+      chats: { single: { status: 'bot', flow_state: { step: 'registro_email' } } },
+    });
+    const r = await sendDeliverySurvey({ sb: stub.client as SupabaseClient, orderId: 'o1', phone: '573000' });
+    expect(sendSurveyMock).not.toHaveBeenCalled();
+    expect(r).toEqual({ sent: false, skipped: 'step:registro_email' });
+  });
+
+  it('envía si el chat está en un step tranquilo (finalizado)', async () => {
+    const stub = makeSupabaseStub({
+      settings: { single: { survey_enabled: true } },
+      chats: { single: { status: 'bot', flow_state: { step: 'finalizado' } } },
+      order_surveys: { onUpsert: () => ({}) },
+    });
+    const r = await sendDeliverySurvey({ sb: stub.client as SupabaseClient, orderId: 'o1', phone: '573000' });
+    expect(sendSurveyMock).toHaveBeenCalledWith({ phone: '573000', orderId: 'o1' });
+    expect(r.sent).toBe(true);
+  });
 });

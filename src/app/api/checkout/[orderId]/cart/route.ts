@@ -114,13 +114,22 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     zone = z;
   }
 
-  // El postre de regalo (si está vinculado) NO es un item editable: se inyecta
-  // aparte como línea $0 y suele estar "no disponible" (oculto del menú). Si el
-  // cliente lo reenvía en el body, lo ignoramos para no marcarlo "no disponible"
-  // ni persistirlo — el order_item real lo agrega el canje al pagar.
+  // El postre de regalo se inyecta aparte como línea $0 calculada (ver
+  // `giftCartLine`). Si está OCULTO del menú (`available:false`) y el front igual
+  // lo reenvía, lo filtramos para no marcarlo "no disponible" ni persistirlo —
+  // el order_item real lo agrega el canje al pagar.
+  //
+  // PERO si el mismo producto TAMBIÉN se vende en el menú (`available:true`),
+  // agregarlo es una compra legítima y NO se filtra (si se filtrara, "no sale
+  // nada" en el carrito). Un cliente con cupón vigente verá la línea pagada que
+  // agregó + la línea $0 inyectada aparte.
   const giftProductId =
     (settings as { review_gift_product_id?: string | null }).review_gift_product_id ?? null;
-  const clientItems = giftProductId
+  const giftProduct = giftProductId
+    ? ((products ?? []) as TotalsProduct[]).find(p => p.id === giftProductId)
+    : undefined;
+  const giftIsHidden = !!giftProduct && giftProduct.available === false;
+  const clientItems = giftIsHidden
     ? parsed.items.filter(i => i.productId !== giftProductId)
     : parsed.items;
 

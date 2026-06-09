@@ -141,6 +141,14 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
     return { ...emptyFlowState(), step: 'pedido_en_curso', isReturning };
   }
 
+  // Sin pedido en curso, pero le entregamos uno hace ≤ 1 h: en vez del menú
+  // normal le ofrecemos hacer OTRO pedido o hablar con una persona del equipo
+  // (post-venta). Reusa los ids `menu_pedir`/`menu_humano` → los rutea handleMenu.
+  if (await pedidoRecienEntregado(ctx.phone)) {
+    await sendCatalogButtons({ to: ctx.phone, key: 'postventa.reescribe', vars: { nombre: firstName } });
+    return { ...emptyFlowState(), step: 'menu', isReturning };
+  }
+
   const menuMsg = await getMessage('menu.pedir');
   const body = render(saludoMsg.body, { nombre: firstName });
 
@@ -295,6 +303,29 @@ async function pedidoEnCurso(
     .limit(1);
   const row = data?.[0] as { order_number: number | null; status: string } | undefined;
   return row ?? null;
+}
+
+/** Ventana (en minutos) tras la entrega en la que, si el cliente vuelve a
+ *  escribir, le ofrecemos "hacer otro pedido / hablar con humano". */
+const REESCRIBE_WINDOW_MIN = 60;
+
+/**
+ * ¿El cliente tiene un pedido entregado hace ≤ REESCRIBE_WINDOW_MIN? Usa
+ * `orders.delivered_at` (lo sella el PATCH de estado al entregar por primera
+ * vez). Los pedidos entregados antes de existir la columna tienen `delivered_at`
+ * NULL y quedan fuera de la ventana — no se rellenan.
+ */
+async function pedidoRecienEntregado(phone: string): Promise<boolean> {
+  const since = new Date(Date.now() - REESCRIBE_WINDOW_MIN * 60_000).toISOString();
+  const { data } = await supabaseAdmin()
+    .from('orders')
+    .select('id')
+    .eq('phone', phone)
+    .eq('status', 'entregado')
+    .gte('delivered_at', since)
+    .order('delivered_at', { ascending: false })
+    .limit(1);
+  return (data?.length ?? 0) > 0;
 }
 
 /**

@@ -641,6 +641,24 @@ const DEFS: MessageDef[] = [
 
   // ----- Post-venta: encuesta + reseña + regalo (Tarea 3) -----
   def({
+    key: 'postventa.reescribe',
+    category: 'conversacion',
+    step: null,
+    kind: 'buttons',
+    label: 'Reescribe tras la entrega (otro pedido / humano)',
+    description: 'Si el cliente vuelve a escribir dentro de 1 h de que se entregó su pedido, en vez del saludo normal le ofrecemos hacer otro pedido o hablar con una persona del equipo.',
+    variables: ['nombre'],
+    default: {
+      body:
+        '¡Hola de nuevo, {{nombre}}! 🙌 ¿Cómo te fue con tu pedido?\n' +
+        '¿Querés hacer otro o que te ayude alguien del equipo?',
+      buttons: [
+        { id: 'menu_pedir', title: '🥪 Hacer otro pedido' },
+        { id: 'menu_humano', title: '🙋 Hablar con humano' },
+      ],
+    },
+  }),
+  def({
     key: 'postventa.encuesta',
     category: 'notificacion',
     step: 'postventa_encuesta',

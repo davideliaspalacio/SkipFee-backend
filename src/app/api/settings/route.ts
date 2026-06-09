@@ -40,7 +40,7 @@ export async function GET() {
       deliveredWindowHours: data.delivered_window_hours ?? 8,
       // Post-venta (Tarea 3)
       surveyEnabled: data.survey_enabled ?? true,
-      surveyDelayHours: data.survey_delay_hours ?? 1,
+      surveyDelayMinutes: data.survey_delay_minutes ?? 30,
       reviewGiftEnabled: data.review_gift_enabled ?? true,
       reviewGiftName: data.review_gift_name ?? 'Postre',
       reviewGiftExpiryDays: data.review_gift_expiry_days ?? 30,
@@ -75,7 +75,7 @@ const patchSchema = z.object({
   deliveredWindowHours: z.number().int().min(1).max(72).optional(),
   // Post-venta (Tarea 3)
   surveyEnabled: z.boolean().optional(),
-  surveyDelayHours: z.number().int().min(0).max(72).optional(),
+  surveyDelayMinutes: z.number().int().min(1).max(1440).optional(),
   reviewGiftEnabled: z.boolean().optional(),
   reviewGiftName: z.string().min(1).max(60).optional(),
   reviewGiftExpiryDays: z.number().int().min(1).max(365).optional(),
@@ -118,7 +118,7 @@ export async function PATCH(request: NextRequest) {
   if (body.ordersPaused !== undefined) update.orders_paused = body.ordersPaused;
   if (body.deliveredWindowHours !== undefined) update.delivered_window_hours = body.deliveredWindowHours;
   if (body.surveyEnabled !== undefined) update.survey_enabled = body.surveyEnabled;
-  if (body.surveyDelayHours !== undefined) update.survey_delay_hours = body.surveyDelayHours;
+  if (body.surveyDelayMinutes !== undefined) update.survey_delay_minutes = body.surveyDelayMinutes;
   if (body.reviewGiftEnabled !== undefined) update.review_gift_enabled = body.reviewGiftEnabled;
   if (body.reviewGiftName !== undefined) update.review_gift_name = body.reviewGiftName;
   if (body.reviewGiftExpiryDays !== undefined) update.review_gift_expiry_days = body.reviewGiftExpiryDays;

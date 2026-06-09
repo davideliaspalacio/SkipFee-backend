@@ -3,7 +3,6 @@ import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
 import { notifyOrderStatus } from '@/lib/orders/notify';
 import { redeemRewardForOrder } from '@/lib/orders/rewards';
-import { sendDeliverySurvey } from '@/lib/orders/survey';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -75,10 +74,20 @@ export async function PATCH(
     });
   }
 
-  // 3. Aplicar cambio (cualquier dirección permitida)
+  // 3. Aplicar cambio (cualquier dirección permitida). Al ENTRAR a 'entregado'
+  //    registramos `delivered_at` (hora de entrega): lo usan la encuesta diferida
+  //    (cron survey-dispatch) y la reescritura post-venta (botones "otro pedido /
+  //    humano" si el cliente escribe dentro de 1 h). Como el paso 2 ya descartó el
+  //    noop, aquí `currentStatus !== newStatus`, así que esto se ejecuta al entrar
+  //    a entregado (una reversa+reentrega rara de operario re-sella la hora, que
+  //    es lo deseable: la encuesta es idempotente por `order_surveys`).
+  const update: Record<string, unknown> = { status: newStatus };
+  if (newStatus === 'entregado') {
+    update.delivered_at = new Date().toISOString();
+  }
   const { error: updErr } = await sb
     .from('orders')
-    .update({ status: newStatus })
+    .update(update)
     .eq('id', id);
 
   if (updErr) {
@@ -106,13 +115,10 @@ export async function PATCH(
     await redeemRewardForOrder({ sb, orderId: id, phone: (order as { phone: string }).phone });
   }
 
-  // 6. Post-venta (Tarea 3): al entregar, enviar la encuesta de satisfacción
-  //    JUSTO DESPUÉS del mensaje de "entregado" (síncrono, sin cron).
-  //    `result.sent` garantiza que se manda una sola vez (la notificación de
-  //    entregado ya es idempotente vía notified_statuses).
-  if (newStatus === 'entregado' && result.sent) {
-    await sendDeliverySurvey({ sb, orderId: id, phone: (order as { phone: string }).phone });
-  }
+  // 6. Post-venta: la encuesta de satisfacción ya NO se manda acá. La difiere el
+  //    cron `survey-dispatch` ~30 min después de la entrega
+  //    (settings.survey_delay_minutes). El `delivered_at` del paso 3 le da al
+  //    cron la hora de entrega para la ventana.
 
   return Response.json({
     ok: true,

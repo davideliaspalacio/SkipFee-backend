@@ -176,6 +176,70 @@ describe('PUT /api/checkout/:orderId/cart', () => {
     expect(body.cart.items).toContainEqual({ productId: 'gift1', name: 'Postre de regalo', qty: 1, price: 0, lineTotal: 0, gift: true });
   });
 
+  it('postre de regalo VISIBLE en el menú (available:true) ⇒ se compra y se cobra (no se filtra)', async () => {
+    // Caso del dueño: el mismo producto es el regalo por reseña Y se vende en el
+    // menú. Sin cupón, agregarlo es una compra normal y NO debe filtrarse (antes
+    // se descartaba en silencio → "no sale nada").
+    const order = { ...validBorrador(), phone: '573000' };
+    supabaseStub = makeSupabaseStub({
+      ...tablesFor(order),
+      products: { rows: [...PRODUCTS, { id: 'gift1', name: 'Brownie', price: 8000, cat: 'Postres', available: true }] },
+      settings: { single: { ...SETTINGS, review_gift_product_id: 'gift1' } },
+      // sin `rewards`: no hay cupón otorgado ⇒ no se inyecta la línea $0
+    });
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }, { productId: 'gift1', qty: 1 }] }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // Se persiste y cobra como cualquier producto.
+    const inserted = itemsInsertCapture.mock.calls[0][0];
+    expect(inserted).toContainEqual({ order_id: 'o1', product_id: 'gift1', qty: 1, price_at_order: 8000 });
+    expect(body.cart.items).toContainEqual({ productId: 'gift1', name: 'Brownie', qty: 1, price: 8000, lineTotal: 8000 });
+    // Sin cupón otorgado, ninguna línea es de regalo.
+    expect(body.cart.items.filter((i: { gift?: boolean }) => i.gift)).toHaveLength(0);
+  });
+
+  it('postre regalo available:true + cupón otorgado ⇒ línea pagada + línea $0 (ambas)', async () => {
+    const order = { ...validBorrador(), phone: '573000' };
+    supabaseStub = makeSupabaseStub({
+      ...tablesFor(order),
+      products: { rows: [...PRODUCTS, { id: 'gift1', name: 'Brownie', price: 8000, cat: 'Postres', available: true }] },
+      settings: { single: { ...SETTINGS, review_gift_product_id: 'gift1' } },
+      rewards: { rows: [{ id: 'rw1', phone: '573000', status: 'otorgado' }] },
+    });
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'gift1', qty: 1 }] }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    // La compra se persiste a precio real (no se filtra).
+    const inserted = itemsInsertCapture.mock.calls[0][0];
+    expect(inserted).toContainEqual({ order_id: 'o1', product_id: 'gift1', qty: 1, price_at_order: 8000 });
+    // El carrito muestra AMBAS: la línea pagada y la $0 inyectada por el cupón.
+    expect(body.cart.items).toContainEqual({ productId: 'gift1', name: 'Brownie', qty: 1, price: 8000, lineTotal: 8000 });
+    expect(body.cart.items).toContainEqual({ productId: 'gift1', name: 'Brownie', qty: 1, price: 0, lineTotal: 0, gift: true });
+  });
+
+  it('review_gift_product_id obsoleto (producto inexistente) ⇒ no se traga el item, cae a 400', async () => {
+    // El filtro viejo descartaba en silencio el item cuyo id coincidía con el gift
+    // configurado. Si ese id ya no existe, ahora el item cae a "missing" 400.
+    supabaseStub = makeSupabaseStub({
+      ...tablesFor(validBorrador()),
+      settings: { single: { ...SETTINGS, review_gift_product_id: 'borrado' } },
+    });
+    const res = await PUT(
+      jsonRequest(URL, 'PUT', { items: [{ productId: 'borrado', qty: 1 }] }),
+      asyncParams({ orderId: 'o1' }),
+    );
+    expect(res.status).toBe(400);
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('borrado');
+  });
+
   it('orden vencida ⇒ 409 status expirada', async () => {
     supabaseStub = makeSupabaseStub(tablesFor({ id: 'o1', status: 'borrador', expires_at: new Date(Date.now() - 1000).toISOString() }));
     const res = await PUT(jsonRequest(URL, 'PUT', { items: [{ productId: 'p01', qty: 1 }] }), asyncParams({ orderId: 'o1' }));
