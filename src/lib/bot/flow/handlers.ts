@@ -1,4 +1,5 @@
 import { supabaseAdmin } from '@/lib/db';
+import { internalApiOrigin } from '@/lib/internal-origin';
 import { sendText } from '@/lib/kapso/client';
 import { sendButtons, sendCtaUrl, sendList } from '@/lib/kapso/interactive';
 import { recordMessage } from '@/lib/messaging';
@@ -667,7 +668,9 @@ export async function handleLinkEnviado(ctx: HandlerContext): Promise<FlowState>
 // =========================================================================
 
 export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> {
-  const origin = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
+  // Self-fetch interno: en Railway el fetch al dominio público falla por loopback,
+  // así que llamamos al endpoint de checkout por el puerto local.
+  const origin = internalApiOrigin();
   const customer = ctx.state.customer;
   const delivery = ctx.state.delivery;
 

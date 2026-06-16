@@ -1,5 +1,6 @@
 import { Type, type FunctionDeclaration } from '@google/genai';
 import { supabaseAdmin } from '@/lib/db';
+import { internalApiOrigin } from '@/lib/internal-origin';
 
 /**
  * Definiciones de tools que Gemini puede invocar.
@@ -202,7 +203,8 @@ export async function crearPedido(args: {
   note?: string;
 }): Promise<unknown> {
   // Reutilizamos el endpoint interno para no duplicar la lógica de validación.
-  const origin = process.env.NEXT_PUBLIC_APP_ORIGIN ?? 'http://localhost:3000';
+  // Self-fetch por el puerto local (en Railway el dominio público no hace loopback).
+  const origin = internalApiOrigin();
   const res = await fetch(`${origin}/api/orders`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
