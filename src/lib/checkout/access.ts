@@ -38,6 +38,10 @@ const PUBLIC_METHOD_PATHS: Array<{ method: string; pathname: string }> = [
   // Solo devuelve promos activas vigentes AHORA — el CRUD /api/promotions
   // (POST/PATCH/DELETE y GET completo) sigue privado.
   { method: 'GET', pathname: '/api/promotions/active' },
+  // POST /api/leads: la landing (/pre-registro) captura leads de la campaña.
+  // Público (sin sesión admin); el origen del sitio de marketing debe estar en
+  // EXTRA_CORS_ORIGINS para que el middleware le responda CORS.
+  { method: 'POST', pathname: '/api/leads' },
 ];
 
 /** Orígenes locales del front en desarrollo (Vite). */

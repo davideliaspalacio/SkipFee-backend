@@ -41,6 +41,11 @@ const schema = z.object({
   // cae al camino manual de zona (no geocodifica). Requiere Geocoding API + billing.
   GOOGLE_MAPS_API_KEY: z.string().optional(),
 
+  // --- Discord (aviso de leads de la landing) ---
+  // Webhook al que POST /api/leads avisa cada pre-registro. Opcional: si falta,
+  // el lead igual se guarda en Supabase y simplemente no se manda a Discord.
+  DISCORD_WEBHOOK_URL: z.string().url().optional(),
+
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });
 
