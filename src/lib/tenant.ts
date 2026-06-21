@@ -6,11 +6,13 @@ import { supabaseAdmin, supabaseForUser } from './db';
 /**
  * Resolución de tenant (empresa) para las rutas multi-empresa.
  *
- * El `companyId` del path `/api/<companyId>/...` es el **slug** de la empresa
- * (identificador público y legible). Aquí lo resolvemos a la empresa real,
+ * El `companyId` del path `/api/<companyId>/...` es el **code** numérico corto
+ * de la empresa (1001, 1002, …). Es secuencial y NO revela el nombre del
+ * negocio (a diferencia del slug). Aquí lo resolvemos a la empresa real,
  * verificamos que el usuario autenticado tenga acceso, y devolvemos un contexto
  * con:
- *   - `company` (id uuid + slug),
+ *   - `company` (id uuid + slug + code). El `slug` se mantiene solo para
+ *     display/logs; el identificador público de la ruta es el `code`.
  *   - `role` del usuario en la empresa (o 'platform' si es owner SkipFee),
  *   - `db`: cliente Supabase con el **JWT del usuario** → RLS activa (2ª capa
  *     de aislamiento). Las queries de negocio van por este cliente, no por
@@ -25,7 +27,7 @@ export type CompanyRole = 'super_admin' | 'admin' | 'cocina' | 'empaque';
 export interface TenantContext {
   user: User;
   accessToken: string;
-  company: { id: string; slug: string };
+  company: { id: string; slug: string; code: number };
   /** Rol del usuario en la empresa, o 'platform' si es owner SkipFee. */
   role: CompanyRole | 'platform';
   isPlatformAdmin: boolean;
@@ -52,7 +54,7 @@ function extractAccessToken(request: NextRequest): string | null {
  */
 export async function getTenantContext(
   request: NextRequest,
-  companySlug: string,
+  companyCode: string,
 ): Promise<{ ctx: TenantContext } | TenantError> {
   const session = await getSessionUser(request);
   if (!session) return { error: 'No autenticado', status: 401 };
@@ -61,13 +63,20 @@ export async function getTenantContext(
   const accessToken = session.refreshedTokens?.accessToken ?? extractAccessToken(request);
   if (!accessToken) return { error: 'No autenticado', status: 401 };
 
+  // El identificador del path debe ser numérico (el code). Si no lo es, 404
+  // (no existe esa empresa) — evita además tirar la query con un NaN.
+  const codeNum = Number(companyCode);
+  if (!companyCode || !Number.isInteger(codeNum)) {
+    return { error: 'Empresa no encontrada', status: 404 };
+  }
+
   const admin = supabaseAdmin();
 
-  // 1) Resolver la empresa por slug.
+  // 1) Resolver la empresa por code (numérico).
   const { data: company } = await admin
     .from('companies')
-    .select('id, slug, status')
-    .eq('slug', companySlug)
+    .select('id, slug, code, status')
+    .eq('code', codeNum)
     .maybeSingle();
 
   if (!company) return { error: 'Empresa no encontrada', status: 404 };
@@ -100,7 +109,7 @@ export async function getTenantContext(
     ctx: {
       user: session.user,
       accessToken,
-      company: { id: company.id, slug: company.slug },
+      company: { id: company.id, slug: company.slug, code: company.code as number },
       role,
       isPlatformAdmin,
       db: supabaseForUser(accessToken),
