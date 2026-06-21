@@ -47,7 +47,7 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await supabaseAdmin()
     .from('companies')
-    .select('id, slug, name, status, next_order_number, created_at')
+    .select('id, code, slug, name, status, next_order_number, created_at')
     .order('created_at', { ascending: false });
 
   if (error) {
@@ -132,7 +132,7 @@ export async function POST(request: NextRequest) {
   const { data: company, error: companyErr } = await admin
     .from('companies')
     .insert({ slug: body.slug, name: body.name })
-    .select('id, slug, name, status, next_order_number, created_at')
+    .select('id, code, slug, name, status, next_order_number, created_at')
     .single();
 
   if (companyErr || !company) {
