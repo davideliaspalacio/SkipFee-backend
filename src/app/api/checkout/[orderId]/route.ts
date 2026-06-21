@@ -33,6 +33,7 @@ type OrderItemRow = {
 
 type OrderRow = {
   id: string;
+  company_id: string;
   phone: string;
   status: string;
   expires_at: string | null;
@@ -61,7 +62,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   const { data: order } = (await sb
     .from('orders')
     .select(
-      `id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message, order_number, tip, tip_percent,
+      `id, company_id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message, order_number, tip, tip_percent,
        customer:customers(name, email),
        items:order_items(qty, price_at_order, product:products(id, name))`,
     )
@@ -90,16 +91,19 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   // Catálogo + zonas + settings + promos activas + estado de operación (todo en paralelo).
   // Las promos las recalculamos en cada GET para que el cart refleje la promo
   // vigente AHORA; `openState` decide si la tienda muestra "cerrado".
+  // Multi-empresa: TODO se scopea por la empresa del pedido (`order.company_id`).
+  const companyId = order.company_id;
   const nowIso = new Date().toISOString();
   const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState] = await Promise.all([
-    sb.from('products').select('id, name, price, cat, available, img, description').eq('available', true).eq('archived', false).order('cat').order('name'),
-    sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').order('name'),
-    sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('id', 1).single(),
+    sb.from('products').select('id, name, price, cat, available, img, description').eq('company_id', companyId).eq('available', true).eq('archived', false).order('cat').order('name'),
+    sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').eq('company_id', companyId).order('name'),
+    sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('company_id', companyId).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
+      .eq('company_id', companyId)
       .eq('active', true)
       .eq('archived', false),
-    loadOpenState(sb),
+    loadOpenState(sb, new Date(), companyId),
   ]);
 
   // `img` y `description` los agregamos al SELECT para embeberlos en el
@@ -146,7 +150,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   // 'otorgado' vigente y hay producto de regalo configurado. NO se persiste en
   // order_items mientras es borrador (el order_item real lo inserta el canje al
   // pagar); acá solo se muestra en el carrito de la tienda.
-  const giftLine = await giftCartLine(sb, order.phone, nowIso);
+  const giftLine = await giftCartLine(sb, order.phone, nowIso, companyId);
   if (giftLine) cart.items.push(giftLine);
   const gift = giftLine ? { name: giftLine.name } : null;
 

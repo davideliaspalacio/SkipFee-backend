@@ -9,7 +9,7 @@ import {
   escalarAHumano,
 } from './tools';
 import { supabaseAdmin } from '@/lib/db';
-import { sendText } from '@/lib/kapso/client';
+import { botSendTextMsg } from '@/lib/bot/sender';
 import { recordMessage } from '@/lib/messaging';
 
 const MAX_TOOL_LOOPS = 5;
@@ -24,11 +24,14 @@ const MAX_TOOL_LOOPS = 5;
  * 4. Envía la respuesta vía Kapso y persiste como direction='bot'.
  */
 export async function botProcessMessage(opts: {
+  /** Empresa dueña del chat (multi-empresa). Lo propaga el webhook de Kapso. */
+  companyId?: string;
   chatId: string;
   phone: string;
   incomingBody: string;
 }): Promise<void> {
   const sb = supabaseAdmin();
+  const companyId = opts.companyId;
 
   // 1. Cargar contexto del cliente (si existe) y últimos mensajes del chat
   const [{ data: chat }, { data: history }] = await Promise.all([
@@ -105,7 +108,7 @@ export async function botProcessMessage(opts: {
 
       const toolTurn: Content = { role: 'user', parts: [] };
       for (const call of functionCalls) {
-        const result = await executeTool(call, opts.chatId);
+        const result = await executeTool(call, opts.chatId, companyId);
         toolTurn.parts!.push({
           functionResponse: {
             name: call.name!,
@@ -134,16 +137,17 @@ export async function botProcessMessage(opts: {
       'Para esto te paso con uno de mis compas humanos, ya te responden en un momentico 🙏';
   }
 
-  // 4. Enviar respuesta vía Kapso y persistir
+  // 4. Enviar respuesta vía Kapso (número de la empresa) y persistir
   if (finalText) {
     try {
-      const result = await sendText(opts.phone, finalText);
+      const result = await botSendTextMsg(companyId, opts.phone, finalText);
       const wamid = result.messages?.[0]?.id ?? null;
       await recordMessage({
         phone: opts.phone,
         direction: 'bot',
         body: finalText,
         kapsoMessageId: wamid,
+        companyId,
       });
     } catch (err) {
       console.error('[bot] error enviando respuesta', err);
@@ -151,16 +155,26 @@ export async function botProcessMessage(opts: {
   }
 }
 
-async function executeTool(call: FunctionCall, chatId: string): Promise<unknown> {
+async function executeTool(
+  call: FunctionCall,
+  chatId: string,
+  companyId?: string,
+): Promise<unknown> {
   const args = (call.args ?? {}) as Record<string, unknown>;
   try {
     switch (call.name) {
       case 'consultarCarta':
-        return await consultarCarta();
+        return await consultarCarta(companyId);
       case 'cotizarPedido':
-        return await cotizarPedido(args as Parameters<typeof cotizarPedido>[0]);
+        return await cotizarPedido({
+          ...(args as Parameters<typeof cotizarPedido>[0]),
+          companyId,
+        });
       case 'crearPedido':
-        return await crearPedido(args as Parameters<typeof crearPedido>[0]);
+        return await crearPedido({
+          ...(args as Parameters<typeof crearPedido>[0]),
+          companyId,
+        });
       case 'escalarAHumano':
         return await escalarAHumano({ chatId, razon: (args.razon as string) ?? '' });
       default:

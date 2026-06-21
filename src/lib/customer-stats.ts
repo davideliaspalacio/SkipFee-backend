@@ -1,4 +1,4 @@
-import { supabaseAdmin } from './db';
+import type { SupabaseClient } from '@supabase/supabase-js';
 
 export interface CustomerStats {
   pedidos: number;
@@ -12,18 +12,24 @@ export interface CustomerStats {
  * solo cuentan los pedidos `entregado`, para no inflar con pedidos
  * en curso que puedan cancelarse.
  *
+ * Scopeado por empresa: recibe el cliente Supabase del tenant (`ctx.db`) y el
+ * `companyId`, y filtra los pedidos por `company_id` (capa 1, + RLS).
+ *
  * Devuelve un Map<customerId, stats>. Los clientes sin pedidos
  * entregados no aparecen; el caller asume defaults a 0 / null.
  */
 export async function aggregateOrdersByCustomer(
+  db: SupabaseClient,
+  companyId: string,
   customerIds: string[],
 ): Promise<Map<string, CustomerStats>> {
   const result = new Map<string, CustomerStats>();
   if (customerIds.length === 0) return result;
 
-  const { data, error } = await supabaseAdmin()
+  const { data, error } = await db
     .from('orders')
     .select('customer_id, total, created_at')
+    .eq('company_id', companyId)
     .eq('status', 'entregado')
     .in('customer_id', customerIds);
 

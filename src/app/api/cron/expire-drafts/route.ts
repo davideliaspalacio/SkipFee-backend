@@ -19,6 +19,11 @@ export const dynamic = 'force-dynamic';
  * Idempotente: solo toca filas que siguen en `borrador` y vencidas, así que
  * correrlo de más no rompe nada.
  *
+ * Multi-empresa: pg_cron sigue llamando un endpoint global; aquí iteramos por
+ * empresa activa y scopeamos el UPDATE por `company_id`. Así cada empresa expira
+ * solo sus propios borradores (red de seguridad por si en el futuro hay reglas
+ * de expiración por empresa).
+ *
  * Opcional (futuro): además del UPDATE, mandar un WhatsApp "tu carrito venció 🛒,
  * escribime *pedir* para reabrirlo" al phone de cada borrador expirado. Se deja
  * fuera por ahora para no spamear; el `data` devuelto trae los phones si se quiere
@@ -37,19 +42,34 @@ export async function POST(request: NextRequest) {
   const sb = supabaseAdmin();
   const nowIso = new Date().toISOString();
 
-  const { data, error } = await sb
-    .from('orders')
-    .update({ status: 'expirado' })
-    .eq('status', 'borrador')
-    .lt('expires_at', nowIso)
-    .select('id, phone');
+  const { data: companies, error: companiesErr } = await sb
+    .from('companies')
+    .select('id')
+    .eq('status', 'active');
 
-  if (error) {
-    console.error('[cron/expire-drafts] update error', error);
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  if (companiesErr) {
+    console.error('[cron/expire-drafts] companies error', companiesErr);
+    return Response.json({ ok: false, error: companiesErr.message }, { status: 500 });
   }
 
-  const expired = data?.length ?? 0;
+  let expired = 0;
+  for (const company of companies ?? []) {
+    const companyId = company.id as string;
+    const { data, error } = await sb
+      .from('orders')
+      .update({ status: 'expirado' })
+      .eq('company_id', companyId)
+      .eq('status', 'borrador')
+      .lt('expires_at', nowIso)
+      .select('id, phone');
+
+    if (error) {
+      console.error('[cron/expire-drafts] update error', { companyId, error });
+      continue; // un fallo de una empresa no debe frenar al resto
+    }
+    expired += data?.length ?? 0;
+  }
+
   if (expired > 0) {
     console.log('[cron/expire-drafts] borradores expirados', { expired, at: nowIso });
   }

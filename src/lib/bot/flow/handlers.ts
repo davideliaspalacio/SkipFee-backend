@@ -1,7 +1,11 @@
 import { supabaseAdmin } from '@/lib/db';
 import { internalApiOrigin } from '@/lib/internal-origin';
-import { sendText } from '@/lib/kapso/client';
-import { sendButtons, sendCtaUrl, sendList } from '@/lib/kapso/interactive';
+import {
+  botSendTextMsg,
+  botSendButtonsMsg,
+  botSendCtaUrlMsg,
+  botSendListMsg,
+} from '@/lib/bot/sender';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render, type RenderVars } from '@/lib/bot/messages/render';
@@ -35,6 +39,15 @@ import { resolveZoneFromLatLng } from './zones';
  */
 
 export interface HandlerContext {
+  /**
+   * Empresa dueña del chat (multi-empresa). Lo propaga el webhook de Kapso.
+   * Scopea catálogo, envío (número de WhatsApp de la empresa), y TODA query
+   * (chats/messages/customers/products/zones/settings/orders/rewards). Opcional
+   * para no romper los tests del flow que construyen el ctx sin empresa: cuando
+   * falta, el envío cae al cliente Kapso global (env) y las queries no se
+   * scopean (compat single-tenant).
+   */
+  companyId?: string;
   chatId: string;
   phone: string;
   contactName?: string; // nombre que llegó del payload Kapso (puede no estar)
@@ -43,17 +56,38 @@ export interface HandlerContext {
 }
 
 // =========================================================================
+// Scoping multi-empresa
+// =========================================================================
+
+/**
+ * Aplica `.eq('company_id', companyId)` a un query builder de Supabase cuando
+ * hay empresa. Sin companyId (tests/legacy) deja el query sin tocar (compat
+ * single-tenant).
+ *
+ * El parámetro/retorno es `Q` SIN constraint estructural (el constraint
+ * `Q extends { eq(): Q }` dispara TS2589 "type instantiation excessively deep"
+ * al inferir el builder completo de Supabase). Llamamos `.eq` vía una vista
+ * mínima casteada; el retorno conserva `Q`, así que `.in`/`.order`/
+ * `.maybeSingle`/etc. siguen disponibles en el call site.
+ */
+function scopeCompany<Q>(query: Q, companyId: string | undefined): Q {
+  if (!companyId) return query;
+  return (query as { eq(c: string, v: string): Q }).eq('company_id', companyId);
+}
+
+// =========================================================================
 // Helpers de envío
 // =========================================================================
 
-async function botSendText(opts: { to: string; body: string }) {
-  const result = await sendText(opts.to, opts.body);
+async function botSendText(ctx: HandlerContext, opts: { to: string; body: string }) {
+  const result = await botSendTextMsg(ctx.companyId, opts.to, opts.body);
   const wamid = result.messages?.[0]?.id ?? null;
   await recordMessage({
     phone: opts.to,
     direction: 'bot',
     body: opts.body,
     kapsoMessageId: wamid,
+    companyId: ctx.companyId,
   });
 }
 
@@ -63,11 +97,10 @@ async function botSendText(opts: { to: string; body: string }) {
  * placeholder bracketado (`[confirmar dirección]`) — útil para logs pero
  * confuso en el panel admin, donde se renderiza tal cual.
  */
-async function botSendInteractive<T extends { messages?: Array<{ id?: string }> }>(opts: {
-  to: string;
-  body: string;
-  send: () => Promise<T>;
-}) {
+async function botSendInteractive<T extends { messages?: Array<{ id?: string }> }>(
+  ctx: HandlerContext,
+  opts: { to: string; body: string; send: () => Promise<T> },
+) {
   const result = await opts.send();
   const wamid = result.messages?.[0]?.id ?? null;
   await recordMessage({
@@ -75,32 +108,33 @@ async function botSendInteractive<T extends { messages?: Array<{ id?: string }> 
     direction: 'bot',
     body: opts.body,
     kapsoMessageId: wamid,
+    companyId: ctx.companyId,
   });
 }
 
-/** Resuelve un mensaje de texto del catálogo, lo interpola y lo envía. */
-async function sendCatalogText(to: string, key: string, vars: RenderVars = {}) {
-  const m = await getMessage(key);
-  await botSendText({ to, body: render(m.body, vars) });
+/** Resuelve un mensaje de texto del catálogo (de la empresa), lo interpola y lo envía. */
+async function sendCatalogText(ctx: HandlerContext, to: string, key: string, vars: RenderVars = {}) {
+  const m = await getMessage(key, ctx.companyId);
+  await botSendText(ctx, { to, body: render(m.body, vars) });
 }
 
 function renderButtons(buttons: ButtonDef[] | undefined, vars: RenderVars = {}) {
   return (buttons ?? []).map(b => ({ id: b.id, title: render(b.title, vars) }));
 }
 
-/** Resuelve un mensaje de botones del catálogo, lo interpola y lo envía. */
-async function sendCatalogButtons(opts: {
+/** Resuelve un mensaje de botones del catálogo (de la empresa), lo interpola y lo envía. */
+async function sendCatalogButtons(ctx: HandlerContext, opts: {
   to: string;
   key: string;
   vars?: RenderVars;
 }) {
-  const m = await getMessage(opts.key);
+  const m = await getMessage(opts.key, ctx.companyId);
   const body = render(m.body, opts.vars);
-  await botSendInteractive({
+  await botSendInteractive(ctx, {
     to: opts.to,
     body,
     send: () =>
-      sendButtons({
+      botSendButtonsMsg(ctx.companyId, {
         to: opts.to,
         body,
         buttons: renderButtons(m.buttons, opts.vars),
@@ -113,31 +147,30 @@ async function sendCatalogButtons(opts: {
 // =========================================================================
 
 export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
-  const { data: customer } = await supabaseAdmin()
-    .from('customers')
-    .select('name')
-    .eq('phone', ctx.phone)
-    .maybeSingle();
+  const { data: customer } = await scopeCompany(
+    supabaseAdmin().from('customers').select('name').eq('phone', ctx.phone),
+    ctx.companyId,
+  ).maybeSingle();
 
   const isReturning = customer !== null;
   // `parce` cubre el caso sin nombre tanto para nuevo como recurrente.
   const firstName =
     (customer?.name ?? ctx.contactName ?? '').split(' ')[0] || 'parce';
 
-  const saludoMsg = await getMessage(isReturning ? 'saludo.recurrente' : 'saludo.nuevo');
+  const saludoMsg = await getMessage(isReturning ? 'saludo.recurrente' : 'saludo.nuevo', ctx.companyId);
 
   // Si ya tiene un pedido SIN entregar, NO ofrecemos "Hacer pedido": saludamos
   // y le ofrecemos ver el estado del pedido en curso (coherencia: no tiene
   // sentido invitarlo a pedir si ya tiene uno andando).
-  const activo = await pedidoEnCurso(ctx.phone);
+  const activo = await pedidoEnCurso(ctx.phone, ctx.companyId);
   if (activo) {
-    const pregMsg = await getMessage('pedido_en_curso.preguntar');
+    const pregMsg = await getMessage('pedido_en_curso.preguntar', ctx.companyId);
     const vars = { numero: numeroPedido(activo.order_number), estado: estadoLegible(activo.status) };
     const body = `${render(saludoMsg.body, { nombre: firstName })}\n\n${render(pregMsg.body, vars)}`;
-    await botSendInteractive({
+    await botSendInteractive(ctx, {
       to: ctx.phone,
       body,
-      send: () => sendButtons({ to: ctx.phone, body, buttons: renderButtons(pregMsg.buttons, vars) }),
+      send: () => botSendButtonsMsg(ctx.companyId, { to: ctx.phone, body, buttons: renderButtons(pregMsg.buttons, vars) }),
     });
     return { ...emptyFlowState(), step: 'pedido_en_curso', isReturning };
   }
@@ -145,15 +178,15 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
   // Sin pedido en curso, pero le entregamos uno hace ≤ 1 h: en vez del menú
   // normal le ofrecemos hacer OTRO pedido o hablar con una persona del equipo
   // (post-venta). Reusa los ids `menu_pedir`/`menu_humano` → los rutea handleMenu.
-  if (await pedidoRecienEntregado(ctx.phone)) {
-    await sendCatalogButtons({ to: ctx.phone, key: 'postventa.reescribe', vars: { nombre: firstName } });
+  if (await pedidoRecienEntregado(ctx.phone, ctx.companyId)) {
+    await sendCatalogButtons(ctx, { to: ctx.phone, key: 'postventa.reescribe', vars: { nombre: firstName } });
     return { ...emptyFlowState(), step: 'menu', isReturning };
   }
 
-  const menuMsg = await getMessage('menu.pedir');
+  const menuMsg = await getMessage('menu.pedir', ctx.companyId);
   const body = render(saludoMsg.body, { nombre: firstName });
 
-  await botSendInteractive({
+  await botSendInteractive(ctx, {
     to: ctx.phone,
     body,
     // Antes había también "🙋 Hablar humano" — lo quitamos para que el
@@ -161,7 +194,7 @@ export async function handleEntrada(ctx: HandlerContext): Promise<FlowState> {
     // necesita atención humana puede escribirlo y `manejarTextoLibre`
     // lo escala vía `escalarHumano`.
     send: () =>
-      sendButtons({
+      botSendButtonsMsg(ctx.companyId, {
         to: ctx.phone,
         body,
         buttons: renderButtons(menuMsg.buttons),
@@ -199,9 +232,9 @@ export async function handleMenu(ctx: HandlerContext): Promise<FlowState> {
 export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
   // Si el cliente ya tiene un pedido SIN entregar, ofrecer ver su estado en vez
   // de arrancar otro (no se le deja iniciar un pedido nuevo mientras tanto).
-  const activo = await pedidoEnCurso(ctx.phone);
+  const activo = await pedidoEnCurso(ctx.phone, ctx.companyId);
   if (activo) {
-    await sendCatalogButtons({
+    await sendCatalogButtons(ctx, {
       to: ctx.phone,
       key: 'pedido_en_curso.preguntar',
       vars: { numero: numeroPedido(activo.order_number), estado: estadoLegible(activo.status) },
@@ -210,33 +243,33 @@ export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
   }
 
   // Gate por horario / pausa manual: no se inician pedidos fuera de horario.
+  // TODO(multi-empresa, transversal): `loadOpenState` (lib/hours) lee `settings`
+  // con id=1; otro agente debe scopearlo por company_id.
   const openState = await loadOpenState(supabaseAdmin());
   if (!openState.open) {
     if (openState.paused) {
-      await sendCatalogText(ctx.phone, 'cerrado.pausa');
+      await sendCatalogText(ctx, ctx.phone, 'cerrado.pausa');
     } else {
-      await sendCatalogText(ctx.phone, 'cerrado.aviso', { apertura: openState.opensLabel ?? 'pronto' });
+      await sendCatalogText(ctx, ctx.phone, 'cerrado.aviso', { apertura: openState.opensLabel ?? 'pronto' });
     }
     return { ...ctx.state, step: 'menu' };
   }
 
-  const { data: customer } = await supabaseAdmin()
-    .from('customers')
-    .select('id, name, email, addr, zone_id')
-    .eq('phone', ctx.phone)
-    .maybeSingle();
+  const { data: customer } = await scopeCompany(
+    supabaseAdmin().from('customers').select('id, name, email, addr, zone_id').eq('phone', ctx.phone),
+    ctx.companyId,
+  ).maybeSingle();
 
   const hasCompleteData =
     customer && customer.name && customer.addr && customer.zone_id;
 
   if (hasCompleteData) {
-    const { data: zone } = await supabaseAdmin()
-      .from('zones')
-      .select('name, tarifa')
-      .eq('id', customer.zone_id as string)
-      .maybeSingle();
+    const { data: zone } = await scopeCompany(
+      supabaseAdmin().from('zones').select('name, tarifa').eq('id', customer.zone_id as string),
+      ctx.companyId,
+    ).maybeSingle();
 
-    await sendCatalogButtons({
+    await sendCatalogButtons(ctx, {
       to: ctx.phone,
       key: 'recurrente.confirmar',
       vars: {
@@ -263,8 +296,8 @@ export async function iniciarPedido(ctx: HandlerContext): Promise<FlowState> {
   }
 
   // Cliente nuevo → registro
-  await sendCatalogText(ctx.phone, 'registro.intro');
-  await sendCatalogText(ctx.phone, 'registro.pedir_nombre');
+  await sendCatalogText(ctx, ctx.phone, 'registro.intro');
+  await sendCatalogText(ctx, ctx.phone, 'registro.pedir_nombre');
   return { ...ctx.state, step: 'registro_nombre', customer: {}, delivery: {} };
 }
 
@@ -291,14 +324,15 @@ function numeroPedido(orderNumber: number | null | undefined): string {
   return orderNumber != null ? `#${orderNumber}` : '';
 }
 
-/** Pedido más reciente del cliente que aún no se entregó (o null). */
+/** Pedido más reciente del cliente (de la empresa) que aún no se entregó (o null). */
 async function pedidoEnCurso(
   phone: string,
+  companyId?: string,
 ): Promise<{ order_number: number | null; status: string } | null> {
-  const { data } = await supabaseAdmin()
-    .from('orders')
-    .select('order_number, status')
-    .eq('phone', phone)
+  const { data } = await scopeCompany(
+    supabaseAdmin().from('orders').select('order_number, status').eq('phone', phone),
+    companyId,
+  )
     .in('status', EN_CURSO_STATUSES)
     .order('created_at', { ascending: false })
     .limit(1);
@@ -316,12 +350,12 @@ const REESCRIBE_WINDOW_MIN = 60;
  * vez). Los pedidos entregados antes de existir la columna tienen `delivered_at`
  * NULL y quedan fuera de la ventana — no se rellenan.
  */
-async function pedidoRecienEntregado(phone: string): Promise<boolean> {
+async function pedidoRecienEntregado(phone: string, companyId?: string): Promise<boolean> {
   const since = new Date(Date.now() - REESCRIBE_WINDOW_MIN * 60_000).toISOString();
-  const { data } = await supabaseAdmin()
-    .from('orders')
-    .select('id')
-    .eq('phone', phone)
+  const { data } = await scopeCompany(
+    supabaseAdmin().from('orders').select('id').eq('phone', phone),
+    companyId,
+  )
     .eq('status', 'entregado')
     .gte('delivered_at', since)
     .order('delivered_at', { ascending: false })
@@ -335,12 +369,12 @@ async function pedidoRecienEntregado(phone: string): Promise<boolean> {
  */
 export async function handlePedidoEnCurso(ctx: HandlerContext): Promise<FlowState> {
   if (ctx.incoming.buttonReplyId === 'pedido_ver_estado') {
-    const activo = await pedidoEnCurso(ctx.phone);
+    const activo = await pedidoEnCurso(ctx.phone, ctx.companyId);
     if (!activo) {
       // El pedido se entregó/cerró mientras tanto → arrancar pedido normal.
       return iniciarPedido(ctx);
     }
-    await sendCatalogText(ctx.phone, 'pedido_en_curso.estado', {
+    await sendCatalogText(ctx, ctx.phone, 'pedido_en_curso.estado', {
       numero: numeroPedido(activo.order_number),
       estado: estadoLegible(activo.status),
     });
@@ -363,7 +397,7 @@ export async function handleConfirmarRecurrente(ctx: HandlerContext): Promise<Fl
   const choice = ctx.incoming.buttonReplyId;
   if (choice === 'rec_si') return enviarLinkPedido(ctx);
   if (choice === 'rec_cambiar') {
-    await sendCatalogText(ctx.phone, 'direccion.pedir_nueva');
+    await sendCatalogText(ctx, ctx.phone, 'direccion.pedir_nueva');
     return { ...ctx.state, step: 'direccion_texto' };
   }
 
@@ -382,12 +416,12 @@ export async function handleConfirmarRecurrente(ctx: HandlerContext): Promise<Fl
 export async function handleRegistroNombre(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text?.trim();
   if (!text || text.length < 2 || text.length > 120) {
-    await sendCatalogText(ctx.phone, 'registro.nombre_invalido');
+    await sendCatalogText(ctx, ctx.phone, 'registro.nombre_invalido');
     return ctx.state;
   }
 
-  await sendCatalogText(ctx.phone, 'registro.gracias');
-  await sendCatalogText(ctx.phone, 'registro.pedir_email');
+  await sendCatalogText(ctx, ctx.phone, 'registro.gracias');
+  await sendCatalogText(ctx, ctx.phone, 'registro.pedir_email');
   return {
     ...ctx.state,
     step: 'registro_email',
@@ -400,12 +434,12 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 export async function handleRegistroEmail(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text?.trim();
   if (!text || !EMAIL_RE.test(text) || text.length > 200) {
-    await sendCatalogText(ctx.phone, 'registro.email_invalido');
+    await sendCatalogText(ctx, ctx.phone, 'registro.email_invalido');
     return ctx.state;
   }
 
   const next: FlowCustomer = { ...ctx.state.customer, email: text };
-  await sendCatalogButtons({
+  await sendCatalogButtons(ctx, {
     to: ctx.phone,
     key: 'registro.confirmar',
     vars: { nombre: next.name ?? '?', correo: text },
@@ -416,11 +450,11 @@ export async function handleRegistroEmail(ctx: HandlerContext): Promise<FlowStat
 export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<FlowState> {
   const choice = ctx.incoming.buttonReplyId;
   if (choice === 'reg_si') {
-    await sendCatalogText(ctx.phone, 'registro.confirmado_pedir_direccion');
+    await sendCatalogText(ctx, ctx.phone, 'registro.confirmado_pedir_direccion');
     return { ...ctx.state, step: 'direccion_texto' };
   }
   if (choice === 'reg_no') {
-    await sendCatalogText(ctx.phone, 'registro.reiniciar');
+    await sendCatalogText(ctx, ctx.phone, 'registro.reiniciar');
     return { ...ctx.state, step: 'registro_nombre', customer: {} };
   }
 
@@ -431,7 +465,7 @@ export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<Flow
     reprompt: async () => {
       // Reenviar el resumen
       const c = ctx.state.customer ?? {};
-      await sendCatalogButtons({
+      await sendCatalogButtons(ctx, {
         to: ctx.phone,
         key: 'registro.confirmar',
         vars: { nombre: c.name ?? '?', correo: c.email ?? '?' },
@@ -451,7 +485,7 @@ export async function handleRegistroConfirmar(ctx: HandlerContext): Promise<Flow
 export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text?.trim();
   if (!text || text.length < 5 || text.length > 500) {
-    await sendCatalogText(ctx.phone, 'direccion.invalida');
+    await sendCatalogText(ctx, ctx.phone, 'direccion.invalida');
     return ctx.state;
   }
 
@@ -467,8 +501,8 @@ export async function handleDireccionTexto(ctx: HandlerContext): Promise<FlowSta
     return pedirZonaManual(ctx, text);
   }
 
-  // Confianza alta → resolver zona por coordenadas.
-  const { zoneId, configured } = await resolveZoneFromLatLng(geo.lat, geo.lng);
+  // Confianza alta → resolver zona por coordenadas (zonas de la empresa).
+  const { zoneId, configured } = await resolveZoneFromLatLng(geo.lat, geo.lng, ctx.companyId);
   const coords = { lat: geo.lat, lng: geo.lng };
   if (zoneId) {
     return confirmarDireccion(ctx, { ...ctx.state.delivery, address: text, ...coords, zoneId });
@@ -490,17 +524,16 @@ async function pedirZonaManual(
   address: string,
   coords?: { lat: number; lng: number },
 ): Promise<FlowState> {
-  const { data: zones } = await supabaseAdmin()
-    .from('zones')
-    .select('id, name, tarifa')
-    .eq('archived', false)
-    .order('name');
+  const { data: zones } = await scopeCompany(
+    supabaseAdmin().from('zones').select('id, name, tarifa').eq('archived', false),
+    ctx.companyId,
+  ).order('name');
   const zonesList = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
   if (zonesList.length === 0) {
-    await sendCatalogText(ctx.phone, 'direccion.sin_zonas');
+    await sendCatalogText(ctx, ctx.phone, 'direccion.sin_zonas');
     return ctx.state;
   }
-  await sendZoneList(ctx.phone, zonesList);
+  await sendZoneList(ctx, ctx.phone, zonesList);
   return {
     ...ctx.state,
     step: 'direccion_zona',
@@ -510,17 +543,18 @@ async function pedirZonaManual(
 
 /** Envía la lista de zonas usando el mensaje editable `direccion.pedir_zona`. */
 async function sendZoneList(
+  ctx: HandlerContext,
   to: string,
   zonesList: Array<{ id: string; name: string; tarifa: number }>,
 ) {
-  const m = await getMessage('direccion.pedir_zona');
+  const m = await getMessage('direccion.pedir_zona', ctx.companyId);
   const rowTpl = m.rowDescriptionTemplate ?? 'Domicilio ${{tarifa}}';
   const body = render(m.body);
-  await botSendInteractive({
+  await botSendInteractive(ctx, {
     to,
     body,
     send: () =>
-      sendList({
+      botSendListMsg(ctx.companyId, {
         to,
         body,
         buttonText: m.buttonText ?? 'Ver zonas',
@@ -545,26 +579,24 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
       stepDescription: 'el bot le pidió al cliente elegir una zona de la lista de cobertura',
       lastBotPrompt: '¿En qué zona queda? (lista de zonas con tarifa)',
       reprompt: async () => {
-        const { data: zones } = await supabaseAdmin()
-          .from('zones')
-          .select('id, name, tarifa')
-          .eq('archived', false)
-          .order('name');
+        const { data: zones } = await scopeCompany(
+          supabaseAdmin().from('zones').select('id, name, tarifa').eq('archived', false),
+          ctx.companyId,
+        ).order('name');
         const list = (zones ?? []) as Array<{ id: string; name: string; tarifa: number }>;
-        await sendZoneList(ctx.phone, list);
+        await sendZoneList(ctx, ctx.phone, list);
         return ctx.state;
       },
     });
   }
 
   const zoneId = listId.slice('zone_'.length);
-  const { data: zone } = await supabaseAdmin()
-    .from('zones')
-    .select('id, name, tarifa')
-    .eq('id', zoneId)
-    .maybeSingle();
+  const { data: zone } = await scopeCompany(
+    supabaseAdmin().from('zones').select('id, name, tarifa').eq('id', zoneId),
+    ctx.companyId,
+  ).maybeSingle();
   if (!zone) {
-    await sendCatalogText(ctx.phone, 'direccion.zona_invalida');
+    await sendCatalogText(ctx, ctx.phone, 'direccion.zona_invalida');
     return ctx.state;
   }
 
@@ -573,12 +605,11 @@ export async function handleDireccionZona(ctx: HandlerContext): Promise<FlowStat
 
 /** Carga la zona y muestra la confirmación (3 botones: guardar / cambiar / no guardar). */
 async function confirmarDireccion(ctx: HandlerContext, delivery: FlowDelivery): Promise<FlowState> {
-  const { data: zone } = await supabaseAdmin()
-    .from('zones')
-    .select('name, tarifa')
-    .eq('id', delivery.zoneId as string)
-    .maybeSingle();
-  await sendCatalogButtons({
+  const { data: zone } = await scopeCompany(
+    supabaseAdmin().from('zones').select('name, tarifa').eq('id', delivery.zoneId as string),
+    ctx.companyId,
+  ).maybeSingle();
+  await sendCatalogButtons(ctx, {
     to: ctx.phone,
     key: 'direccion.confirmar',
     vars: {
@@ -592,7 +623,7 @@ async function confirmarDireccion(ctx: HandlerContext, delivery: FlowDelivery): 
 
 /** Dirección fuera de cobertura: no se rechaza la venta, se ofrece humano. */
 async function irFueraCobertura(ctx: HandlerContext, delivery: FlowDelivery): Promise<FlowState> {
-  await sendCatalogButtons({
+  await sendCatalogButtons(ctx, {
     to: ctx.phone,
     key: 'direccion.fuera_cobertura',
     vars: { direccion: delivery.address ?? '' },
@@ -611,7 +642,7 @@ export async function handleDireccionConfirmar(ctx: HandlerContext): Promise<Flo
     return enviarLinkPedido(withPersist(ctx, false));
   }
   if (choice === 'dir_editar') {
-    await sendCatalogText(ctx.phone, 'direccion.reeditar');
+    await sendCatalogText(ctx, ctx.phone, 'direccion.reeditar');
     return {
       ...ctx.state,
       step: 'direccion_texto',
@@ -638,7 +669,7 @@ export async function handleDireccionFueraCobertura(ctx: HandlerContext): Promis
     return escalarHumano(ctx, 'dirección fuera de cobertura — el cliente pidió ayuda');
   }
   if (choice === 'fuera_cambiar') {
-    await sendCatalogText(ctx.phone, 'direccion.reeditar');
+    await sendCatalogText(ctx, ctx.phone, 'direccion.reeditar');
     return {
       ...ctx.state,
       step: 'direccion_texto',
@@ -659,7 +690,7 @@ export async function handleDireccionFueraCobertura(ctx: HandlerContext): Promis
 // =========================================================================
 
 export async function handleLinkEnviado(ctx: HandlerContext): Promise<FlowState> {
-  await sendCatalogText(ctx.phone, 'link.post_envio');
+  await sendCatalogText(ctx, ctx.phone, 'link.post_envio');
   return ctx.state;
 }
 
@@ -674,7 +705,10 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
   const customer = ctx.state.customer;
   const delivery = ctx.state.delivery;
 
+  // companyId va en el payload para que la ruta de checkout (otro agente, aún
+  // por migrar a por-empresa) cree la sesión/pedido en la empresa correcta.
   const sessionPayload: Record<string, unknown> = { phone: ctx.phone };
+  if (ctx.companyId) sessionPayload.companyId = ctx.companyId;
   if (customer?.name) {
     sessionPayload.customer = {
       name: customer.name,
@@ -712,14 +746,14 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
   }
 
   if (!url) {
-    await sendCatalogText(ctx.phone, 'link.error');
+    await sendCatalogText(ctx, ctx.phone, 'link.error');
     return { ...ctx.state, step: 'menu' };
   }
 
-  const linkMsg = await getMessage('link.enviar');
+  const linkMsg = await getMessage('link.enviar', ctx.companyId);
   const linkBody = render(linkMsg.body);
   const linkDisplay = linkMsg.displayText ?? 'Ver carta y pedir 🛒';
-  await botSendInteractive({
+  await botSendInteractive(ctx, {
     to: ctx.phone,
     // El CTA URL en WhatsApp se ve como `body` + un botón con `displayText`
     // que abre `url`. Para el panel admin guardamos los tres: body, etiqueta
@@ -727,7 +761,7 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
     // el cliente.
     body: `${linkBody}\n\n🔗 ${linkDisplay}: ${url}`,
     send: () =>
-      sendCtaUrl({
+      botSendCtaUrlMsg(ctx.companyId, {
         to: ctx.phone,
         body: linkBody,
         displayText: linkDisplay,
@@ -749,12 +783,16 @@ interface PostventaSettings {
   reviewGiftExpiryDays: number;
 }
 
-async function loadPostventaSettings(): Promise<PostventaSettings> {
-  const { data } = await supabaseAdmin()
+async function loadPostventaSettings(companyId?: string): Promise<PostventaSettings> {
+  // settings por empresa: con companyId filtra por `company_id`; sin él (legacy)
+  // usa la fila única id=1 (single-tenant).
+  const base = supabaseAdmin()
     .from('settings')
-    .select('review_gift_enabled, review_gift_name, review_link, review_gift_expiry_days')
-    .eq('id', 1)
-    .maybeSingle();
+    .select('review_gift_enabled, review_gift_name, review_link, review_gift_expiry_days');
+  const { data } = await (companyId
+    ? base.eq('company_id', companyId)
+    : base.eq('id', 1)
+  ).maybeSingle();
   return {
     reviewGiftEnabled: (data?.review_gift_enabled as boolean) ?? true,
     reviewGiftName: (data?.review_gift_name as string) ?? 'Postre',
@@ -767,29 +805,35 @@ async function loadPostventaSettings(): Promise<PostventaSettings> {
  * Envía la encuesta de satisfacción (lista 1–5). La usa el cron `survey-dispatch`.
  * Las filas se arman acá (no son texto editable); el body/botón sí lo son.
  */
-export async function sendSurvey(opts: { phone: string; orderId: string }): Promise<void> {
-  const m = await getMessage('postventa.encuesta');
+export async function sendSurvey(opts: { phone: string; orderId: string; companyId?: string }): Promise<void> {
+  const { companyId } = opts;
+  const m = await getMessage('postventa.encuesta', companyId);
   const encuestaBody = render(m.body);
-  await botSendInteractive({
+  // sendSurvey lo llama el cron survey-dispatch (no tiene HandlerContext), así
+  // que envía/persiste por companyId directamente (sin pasar por botSendInteractive).
+  const result = await botSendListMsg(companyId, {
     to: opts.phone,
     body: encuestaBody,
-    send: () =>
-      sendList({
-        to: opts.phone,
-        body: encuestaBody,
-        buttonText: m.buttonText ?? 'Calificar',
-        sections: [
-          {
-            rows: [
-              { id: 'survey_5', title: '⭐⭐⭐⭐⭐ ¡Excelente!' },
-              { id: 'survey_4', title: '⭐⭐⭐⭐ Bueno' },
-              { id: 'survey_3', title: '⭐⭐⭐ Normal' },
-              { id: 'survey_2', title: '⭐⭐ Malo' },
-              { id: 'survey_1', title: '⭐ Muy malo' },
-            ],
-          },
+    buttonText: m.buttonText ?? 'Calificar',
+    sections: [
+      {
+        rows: [
+          { id: 'survey_5', title: '⭐⭐⭐⭐⭐ ¡Excelente!' },
+          { id: 'survey_4', title: '⭐⭐⭐⭐ Bueno' },
+          { id: 'survey_3', title: '⭐⭐⭐ Normal' },
+          { id: 'survey_2', title: '⭐⭐ Malo' },
+          { id: 'survey_1', title: '⭐ Muy malo' },
         ],
-      }),
+      },
+    ],
+  });
+  const wamid = result.messages?.[0]?.id ?? null;
+  await recordMessage({
+    phone: opts.phone,
+    direction: 'bot',
+    body: encuestaBody,
+    kapsoMessageId: wamid,
+    companyId,
   });
 }
 
@@ -803,7 +847,7 @@ export async function handlePostventaEncuesta(ctx: HandlerContext): Promise<Flow
       stepDescription: 'el bot le pidió al cliente calificar su pedido del 1 al 5',
       lastBotPrompt: 'Calificá tu pedido del 1 al 5 (lista de opciones)',
       reprompt: async () => {
-        await sendCatalogText(ctx.phone, 'postventa.encuesta_invalida');
+        await sendCatalogText(ctx, ctx.phone, 'postventa.encuesta_invalida');
         return ctx.state;
       },
     });
@@ -812,15 +856,18 @@ export async function handlePostventaEncuesta(ctx: HandlerContext): Promise<Flow
   // Guardar la calificación en la encuesta del pedido.
   const surveyOrderId = ctx.state.surveyOrderId;
   if (surveyOrderId) {
-    await supabaseAdmin()
-      .from('order_surveys')
-      .update({ rating, responded_at: new Date().toISOString() })
-      .eq('order_id', surveyOrderId);
+    await scopeCompany(
+      supabaseAdmin()
+        .from('order_surveys')
+        .update({ rating, responded_at: new Date().toISOString() })
+        .eq('order_id', surveyOrderId),
+      ctx.companyId,
+    );
   }
 
   // Rama baja (1–3): pasar a humano. El panel marca la alerta por rating ≤3.
   if (rating <= 3) {
-    await sendCatalogText(ctx.phone, 'postventa.gracias_baja', {
+    await sendCatalogText(ctx, ctx.phone, 'postventa.gracias_baja', {
       nombre: ctx.state.customer?.name?.split(' ')[0] ?? '',
     });
     await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', ctx.chatId);
@@ -829,15 +876,15 @@ export async function handlePostventaEncuesta(ctx: HandlerContext): Promise<Flow
   }
 
   // Rama alta (4–5): invitar a reseñar con link + promesa del postre.
-  const settings = await loadPostventaSettings();
-  const linkMsg = await getMessage('postventa.invitar_resena');
+  const settings = await loadPostventaSettings(ctx.companyId);
+  const linkMsg = await getMessage('postventa.invitar_resena', ctx.companyId);
   const resenaBody = render(linkMsg.body, { postre: settings.reviewGiftName });
   const resenaDisplay = linkMsg.displayText ?? 'Dejar reseña ⭐';
-  await botSendInteractive({
+  await botSendInteractive(ctx, {
     to: ctx.phone,
     body: `${resenaBody}\n\n🔗 ${resenaDisplay}: ${settings.reviewLink}`,
     send: () =>
-      sendCtaUrl({
+      botSendCtaUrlMsg(ctx.companyId, {
         to: ctx.phone,
         body: resenaBody,
         displayText: resenaDisplay,
@@ -855,39 +902,41 @@ export async function handlePostventaResena(ctx: HandlerContext): Promise<FlowSt
       stepDescription: 'el bot invitó al cliente a dejar una reseña y mandar el pantallazo para reclamar el postre',
       lastBotPrompt: 'Mandanos el pantallazo de tu reseña para activar tu postre',
       reprompt: async () => {
-        await sendCatalogText(ctx.phone, 'postventa.resena_pedir_screenshot');
+        await sendCatalogText(ctx, ctx.phone, 'postventa.resena_pedir_screenshot');
         return ctx.state;
       },
     });
   }
 
-  const settings = await loadPostventaSettings();
+  const settings = await loadPostventaSettings(ctx.companyId);
   if (settings.reviewGiftEnabled) {
     await crearRewardPendiente({
       phone: ctx.phone,
       orderId: ctx.state.surveyOrderId,
       screenshotUrl: img.url ?? null,
+      companyId: ctx.companyId,
     });
     // NO pasamos el chat a 'human': la reseña la verifica el operario desde el
     // panel (banner que busca el cupón 'pendiente' por teléfono, sin depender del
     // estado del chat). Dejar el chat en modo bot evita trabar al cliente: puede
     // seguir interactuando (p. ej. hacer otro pedido) mientras se verifica.
   }
-  await sendCatalogText(ctx.phone, 'postventa.resena_recibida', { postre: settings.reviewGiftName });
+  await sendCatalogText(ctx, ctx.phone, 'postventa.resena_recibida', { postre: settings.reviewGiftName });
   return { ...ctx.state, step: 'finalizado' };
 }
 
-/** Crea un reward pendiente evitando duplicados (un activo por teléfono). */
+/** Crea un reward pendiente (de la empresa) evitando duplicados (un activo por teléfono). */
 async function crearRewardPendiente(opts: {
   phone: string;
   orderId?: string;
   screenshotUrl: string | null;
+  companyId?: string;
 }): Promise<void> {
   const sb = supabaseAdmin();
-  const { data: activos } = await sb
-    .from('rewards')
-    .select('id')
-    .eq('phone', opts.phone)
+  const { data: activos } = await scopeCompany(
+    sb.from('rewards').select('id').eq('phone', opts.phone),
+    opts.companyId,
+  )
     .in('status', ['pendiente', 'otorgado'])
     .limit(1);
   if (activos && activos.length > 0) return; // ya tiene uno activo
@@ -898,6 +947,7 @@ async function crearRewardPendiente(opts: {
     status: 'pendiente',
     order_id_origen: opts.orderId ?? null,
     screenshot_url: opts.screenshotUrl,
+    ...(opts.companyId ? { company_id: opts.companyId } : {}),
   });
 }
 
@@ -908,13 +958,13 @@ async function crearRewardPendiente(opts: {
 export async function escalarHumano(ctx: HandlerContext, razon: string): Promise<FlowState> {
   await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', ctx.chatId);
   console.log('[bot] escalado a humano', { chatId: ctx.chatId, razon });
-  await sendCatalogText(ctx.phone, 'humano.escalar');
+  await sendCatalogText(ctx, ctx.phone, 'humano.escalar');
   return { ...ctx.state, step: 'finalizado' };
 }
 
 export async function cancelarFlujo(ctx: HandlerContext): Promise<FlowState> {
   console.log('[bot] flujo cancelado por el cliente', { chatId: ctx.chatId });
-  await sendCatalogText(ctx.phone, 'flujo.cancelar');
+  await sendCatalogText(ctx, ctx.phone, 'flujo.cancelar');
   return emptyFlowState();
 }
 
@@ -931,29 +981,40 @@ export async function manejarTextoLibre(opts: {
     stepDescription: opts.stepDescription,
     lastBotPrompt: opts.lastBotPrompt,
     userText,
+    companyId: opts.ctx.companyId,
   });
 
   if (result.intent === 'cancel') {
-    await botSendText({ to: opts.ctx.phone, body: result.reply });
+    await botSendText(opts.ctx, { to: opts.ctx.phone, body: result.reply });
     return emptyFlowState();
   }
   if (result.intent === 'human') {
-    await botSendText({ to: opts.ctx.phone, body: result.reply });
+    await botSendText(opts.ctx, { to: opts.ctx.phone, body: result.reply });
     await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', opts.ctx.chatId);
     return { ...opts.ctx.state, step: 'finalizado' };
   }
 
-  await botSendText({ to: opts.ctx.phone, body: result.reply });
+  await botSendText(opts.ctx, { to: opts.ctx.phone, body: result.reply });
   return opts.reprompt();
 }
 
 export async function manejarErrorInesperado(opts: {
   chatId: string;
   phone: string;
+  companyId?: string;
 }): Promise<void> {
   try {
     await supabaseAdmin().from('chats').update({ status: 'human' }).eq('id', opts.chatId);
-    await sendCatalogText(opts.phone, 'error.inesperado');
+    // Construye un ctx mínimo para reutilizar sendCatalogText (envío + catálogo
+    // por empresa). El error ya escaló el chat a humano; este es el aviso final.
+    const ctx: HandlerContext = {
+      companyId: opts.companyId,
+      chatId: opts.chatId,
+      phone: opts.phone,
+      state: emptyFlowState(),
+      incoming: {},
+    };
+    await sendCatalogText(ctx, opts.phone, 'error.inesperado');
   } catch (err) {
     console.error('[bot] manejarErrorInesperado fallback fail', err);
   }
@@ -961,7 +1022,7 @@ export async function manejarErrorInesperado(opts: {
 
 async function reenviarMenu(ctx: HandlerContext): Promise<FlowState> {
   // En sync con el menú inicial: solo "Hacer pedido" (sin el saludo).
-  await sendCatalogButtons({
+  await sendCatalogButtons(ctx, {
     to: ctx.phone,
     key: 'menu.pedir',
   });

@@ -1,6 +1,6 @@
 import { Type, type FunctionDeclaration } from '@google/genai';
 import { supabaseAdmin } from '@/lib/db';
-import { internalApiOrigin } from '@/lib/internal-origin';
+import { createBotOrder } from '@/lib/bot/orders';
 
 /**
  * Definiciones de tools que Gemini puede invocar.
@@ -105,15 +105,15 @@ export const toolDefinitions: FunctionDeclaration[] = [
 // Implementaciones de los tools (las ejecuta el agent loop)
 // =========================================================================
 
-export async function consultarCarta(): Promise<unknown> {
+export async function consultarCarta(companyId?: string): Promise<unknown> {
   const sb = supabaseAdmin();
-  const { data, error } = await sb
+  let query = sb
     .from('products')
     .select('id, name, price, cat')
     .eq('available', true)
-    .eq('archived', false)
-    .order('cat')
-    .order('name');
+    .eq('archived', false);
+  if (companyId) query = query.eq('company_id', companyId);
+  const { data, error } = await query.order('cat').order('name');
   if (error) return { ok: false, error: error.message };
 
   const byCategory = new Map<string, Array<{ id: string; name: string; price: number }>>();
@@ -131,13 +131,17 @@ export async function consultarCarta(): Promise<unknown> {
 export async function cotizarPedido(args: {
   items: Array<{ productId: string; qty: number }>;
   zoneId?: string;
+  companyId?: string;
 }): Promise<unknown> {
   const sb = supabaseAdmin();
+  const companyId = args.companyId;
   const productIds = args.items.map(i => i.productId);
-  const { data: products, error: prodErr } = await sb
+  let prodQuery = sb
     .from('products')
     .select('id, name, price, available')
     .in('id', productIds);
+  if (companyId) prodQuery = prodQuery.eq('company_id', companyId);
+  const { data: products, error: prodErr } = await prodQuery;
   if (prodErr) return { ok: false, error: prodErr.message };
 
   const productById = new Map((products ?? []).map(p => [p.id, p]));
@@ -160,19 +164,18 @@ export async function cotizarPedido(args: {
     return { ok: false, error: 'No disponibles', unavailable };
   }
 
-  const { data: settings } = await sb
-    .from('settings')
-    .select('base_delivery_fee')
-    .eq('id', 1)
-    .single();
+  // settings por empresa (con companyId) o fila única id=1 (legacy single-tenant).
+  const settingsBase = sb.from('settings').select('base_delivery_fee');
+  const { data: settings } = await (companyId
+    ? settingsBase.eq('company_id', companyId)
+    : settingsBase.eq('id', 1)
+  ).maybeSingle();
 
   let zoneInfo: { id: string; name: string; tarifa: number } | null = null;
   if (args.zoneId) {
-    const { data: z } = await sb
-      .from('zones')
-      .select('id, name, tarifa')
-      .eq('id', args.zoneId)
-      .single();
+    let zoneQuery = sb.from('zones').select('id, name, tarifa').eq('id', args.zoneId);
+    if (companyId) zoneQuery = zoneQuery.eq('company_id', companyId);
+    const { data: z } = await zoneQuery.single();
     if (z) zoneInfo = z;
   }
 
@@ -201,23 +204,23 @@ export async function crearPedido(args: {
   items: Array<{ productId: string; qty: number }>;
   paymentMethod: string;
   note?: string;
+  companyId?: string;
 }): Promise<unknown> {
-  // Reutilizamos el endpoint interno para no duplicar la lógica de validación.
-  // Self-fetch por el puerto local (en Railway el dominio público no hace loopback).
-  const origin = internalApiOrigin();
-  const res = await fetch(`${origin}/api/orders`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      customer: { name: args.customerName, phone: args.phone, addr: args.address },
-      zoneId: args.zoneId,
-      items: args.items,
-      paymentMethod: args.paymentMethod,
-      note: args.note,
-    }),
+  // El bot crea el pedido DIRECTO en BD (multi-empresa). La vieja ruta global
+  // `POST /api/orders` ya no existe; ver `lib/bot/orders.ts` para la decisión.
+  if (!args.companyId) {
+    return { ok: false, error: 'Falta companyId para crear el pedido.' };
+  }
+  return createBotOrder({
+    companyId: args.companyId,
+    customerName: args.customerName,
+    phone: args.phone,
+    address: args.address,
+    zoneId: args.zoneId,
+    items: args.items,
+    paymentMethod: args.paymentMethod,
+    note: args.note,
   });
-  const body = await res.json();
-  return body;
 }
 
 export async function escalarAHumano(opts: {

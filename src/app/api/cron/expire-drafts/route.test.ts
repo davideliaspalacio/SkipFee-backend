@@ -19,8 +19,11 @@ function req(secret?: string) {
 }
 
 // `rows` = los borradores vencidos que el UPDATE ... RETURNING devolvería.
+// Multi-empresa: el cron itera `companies` activas; declaramos una para que el
+// UPDATE scopeado por company_id se ejecute.
 function stubWithExpired(rows: unknown[]) {
   return makeSupabaseStub({
+    companies: { rows: [{ id: 'c1', status: 'active' }] },
     orders: {
       onUpdate: (payload: unknown, filters: Record<string, unknown>) => {
         updateCapture(payload, filters);
@@ -74,6 +77,8 @@ describe('POST /api/cron/expire-drafts', () => {
     const [payload, filters] = updateCapture.mock.calls[0];
     expect(payload.status).toBe('expirado');
     expect(filters.status).toBe('borrador');
+    // scopeado por empresa
+    expect(filters.company_id).toBe('c1');
     // filtró por expires_at < ahora (lt)
     expect(Object.keys(filters).some(k => k.startsWith('expires_at'))).toBe(true);
   });

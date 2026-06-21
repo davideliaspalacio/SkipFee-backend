@@ -47,9 +47,11 @@ export async function assistOffScript(opts: {
   lastBotPrompt: string;
   /** Texto literal que escribió el cliente */
   userText: string;
+  /** Empresa dueña del chat: el tono/persona (`ia.fallback`) es editable por empresa. */
+  companyId?: string;
 }): Promise<FallbackResult> {
-  // Tono/persona + respuesta segura editables desde la UI.
-  const cfg = await getMessage('ia.fallback');
+  // Tono/persona + respuesta segura editables desde la UI (por empresa).
+  const cfg = await getMessage('ia.fallback', opts.companyId);
   const systemPrompt = cfg.systemPrompt ?? '';
   /**
    * Resultado por defecto si Gemini falla, timeoutea o devuelve algo inválido.

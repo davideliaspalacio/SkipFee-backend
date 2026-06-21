@@ -17,9 +17,13 @@ describe('isStorefrontSelfCors', () => {
 });
 
 describe('isPublicPath', () => {
-  it('zones y products/available son públicas (el storefront los puede pedir aparte)', () => {
-    expect(isPublicPath('/api/zones', 'GET')).toBe(true);
+  it('products/available sigue pública (catálogo de la tienda por empresa)', () => {
     expect(isPublicPath('/api/products/available', 'GET')).toBe(true);
+  });
+
+  it('webhooks por empresa son públicos (el secreto es la firma del webhook)', () => {
+    expect(isPublicPath('/api/webhooks/kapso/bros-and-subs', 'POST')).toBe(true);
+    expect(isPublicPath('/api/webhooks/wompi/bros-and-subs', 'POST')).toBe(true);
   });
 
   it('checkout es público (no requiere sesión admin)', () => {
@@ -27,14 +31,21 @@ describe('isPublicPath', () => {
     expect(isPublicPath('/api/checkout/o1/cart', 'PUT')).toBe(true);
   });
 
-  it('orders POST es público (lo llama el bot), GET es privado (kanban admin)', () => {
-    expect(isPublicPath('/api/orders', 'POST')).toBe(true);
-    expect(isPublicPath('/api/orders', 'GET')).toBe(false);
+  it('leads POST es público (landing de marketing, capa plataforma)', () => {
+    expect(isPublicPath('/api/leads', 'POST')).toBe(true);
+  });
+
+  it('multi-empresa: zones/quotes/orders/promotions ya NO son públicas (movidas a [companyId])', () => {
+    expect(isPublicPath('/api/zones', 'GET')).toBe(false);
+    expect(isPublicPath('/api/orders', 'POST')).toBe(false);
+    expect(isPublicPath('/api/quotes', 'POST')).toBe(false);
+    expect(isPublicPath('/api/promotions/active', 'GET')).toBe(false);
   });
 
   it('rutas admin siguen privadas', () => {
     expect(isPublicPath('/api/dashboard/today', 'GET')).toBe(false);
     expect(isPublicPath('/api/orders/o1/status', 'PATCH')).toBe(false);
+    expect(isPublicPath('/api/platform/companies', 'POST')).toBe(false);
   });
 });
 

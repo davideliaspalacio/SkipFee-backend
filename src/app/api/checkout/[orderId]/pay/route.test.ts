@@ -9,6 +9,19 @@ vi.mock('@/lib/db', () => ({
   supabaseAdmin: () => supabaseStub.client,
 }));
 
+// Multi-empresa: `wompiConfigFor(companyId)` reemplaza la lectura directa de
+// process.env. Lo mockeamos derivando la config de las MISMAS env vars que ya
+// usaban estos tests (WOMPI_MODE/PUBLIC_KEY/INTEGRITY_SECRET), así el resto del
+// test no cambia.
+vi.mock('@/lib/integrations', () => ({
+  wompiConfigFor: vi.fn(async () => ({
+    mode: (process.env.WOMPI_MODE ?? 'mock') === 'real' ? 'real' : 'mock',
+    publicKey: process.env.WOMPI_PUBLIC_KEY ?? null,
+    integritySecret: process.env.WOMPI_INTEGRITY_SECRET ?? null,
+    eventsSecret: process.env.WOMPI_EVENTS_SECRET ?? null,
+  })),
+}));
+
 import { POST, OPTIONS } from './route';
 
 const URL = 'http://localhost:3000/api/checkout/o1/pay';
@@ -30,6 +43,7 @@ function tablesFor(orderRow: unknown) {
 function completeOrder() {
   return {
     id: 'o1',
+    company_id: 'co-1',
     phone: '573136913188',
     status: 'borrador',
     expires_at: new Date(Date.now() + 3600_000).toISOString(),
@@ -206,7 +220,7 @@ describe('POST /api/checkout/:orderId/pay', () => {
     );
     expect(res.status).toBe(500);
     const body = await res.json();
-    expect(body.error).toMatch(/WOMPI_PUBLIC_KEY/);
+    expect(body.error).toMatch(/wompi_public_key/);
   });
 
   it('WOMPI_MODE=real sin WOMPI_INTEGRITY_SECRET ⇒ 500 con error claro', async () => {

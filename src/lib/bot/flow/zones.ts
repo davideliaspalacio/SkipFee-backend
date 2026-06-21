@@ -10,11 +10,15 @@ import { resolveZone, type ZoneCoverage } from '@/lib/geo/polygon';
 export async function resolveZoneFromLatLng(
   lat: number,
   lng: number,
+  companyId?: string,
 ): Promise<{ zoneId: string | null; configured: boolean }> {
-  const { data, error } = await supabaseAdmin()
+  // Solo las zonas de la empresa. Sin companyId (legacy), todas (single-tenant).
+  let query = supabaseAdmin()
     .from('zones')
     .select('id, lat, lng, coverage, coverage_radius_m')
     .eq('archived', false);
+  if (companyId) query = query.eq('company_id', companyId);
+  const { data, error } = await query;
   if (error || !data) return { zoneId: null, configured: false };
 
   const zones: ZoneCoverage[] = data.map(z => ({

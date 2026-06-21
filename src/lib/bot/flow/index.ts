@@ -1,4 +1,4 @@
-import { sendText } from '@/lib/kapso/client';
+import { botSendTextMsg } from '@/lib/bot/sender';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage, getKeywords } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
@@ -67,6 +67,8 @@ function detectGlobalIntent(
  *   5. Guardar nuevo flow_state
  */
 export async function processFlowMessage(opts: {
+  /** Empresa dueña del chat. Lo pasa el webhook de Kapso (resuelto por número). */
+  companyId?: string;
   chatId: string;
   phone: string;
   contactName?: string;
@@ -74,6 +76,7 @@ export async function processFlowMessage(opts: {
 }): Promise<void> {
   const state = await loadFlowState(opts.chatId);
   const ctx: HandlerContext = {
+    companyId: opts.companyId,
     chatId: opts.chatId,
     phone: opts.phone,
     contactName: opts.contactName,
@@ -87,13 +90,14 @@ export async function processFlowMessage(opts: {
 
 export async function routeFlow(ctx: HandlerContext): Promise<FlowState> {
   const text = ctx.incoming.text;
+  const companyId = ctx.companyId;
 
   // 1. Keywords globales (solo sobre texto, no en button replies). Editables.
   const globalKeywords: GlobalKeywordMap = {
-    cancelar: await getKeywords('keywords.cancelar'),
-    humano: await getKeywords('keywords.humano'),
-    ayuda: await getKeywords('keywords.ayuda'),
-    cambiar_dir: await getKeywords('keywords.cambiar_dir'),
+    cancelar: await getKeywords('keywords.cancelar', companyId),
+    humano: await getKeywords('keywords.humano', companyId),
+    ayuda: await getKeywords('keywords.ayuda', companyId),
+    cambiar_dir: await getKeywords('keywords.cambiar_dir', companyId),
   };
   const intent = text ? detectGlobalIntent(text, globalKeywords) : null;
   if (intent === 'cancelar') return cancelarFlujo(ctx);
@@ -103,11 +107,11 @@ export async function routeFlow(ctx: HandlerContext): Promise<FlowState> {
   if (intent === 'cambiar_dir') {
     // Solo aplica si ya capturó datos antes (sino caería al flujo nuevo).
     // Mandar prompt y mover step a direccion_texto preservando customer.
-    const m = await getMessage('direccion.pedir_nueva');
+    const m = await getMessage('direccion.pedir_nueva', companyId);
     const body = render(m.body);
-    const result = await sendText(ctx.phone, body);
+    const result = await botSendTextMsg(companyId, ctx.phone, body);
     const wamid = result.messages?.[0]?.id ?? null;
-    await recordMessage({ phone: ctx.phone, direction: 'bot', body, kapsoMessageId: wamid });
+    await recordMessage({ phone: ctx.phone, direction: 'bot', body, kapsoMessageId: wamid, companyId });
     return { ...ctx.state, step: 'direccion_texto', delivery: { ...ctx.state.delivery, address: undefined } };
   }
 
@@ -115,7 +119,7 @@ export async function routeFlow(ctx: HandlerContext): Promise<FlowState> {
   //    de pedido. Cubre el texto exacto del botón de "carrito vencido".
   //    (en 'pedido_en_curso' NO interceptamos: ese step maneja sus propios
   //    botones/texto; si interceptáramos, "otro pedido" por texto haría loop.)
-  if (ctx.state.step !== 'pedido_en_curso' && detectPedirIntent(text, await getKeywords('keywords.pedir'))) return iniciarPedido(ctx);
+  if (ctx.state.step !== 'pedido_en_curso' && detectPedirIntent(text, await getKeywords('keywords.pedir', companyId))) return iniciarPedido(ctx);
 
   // 3. Dispatch por step
   switch (ctx.state.step) {

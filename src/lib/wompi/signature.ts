@@ -29,13 +29,21 @@ export interface IntegrityInput {
   amountInCents: number;
   currency: string;
   expirationTime?: string;
+  /**
+   * Integrity secret de la empresa (`wompiConfigFor(companyId).integritySecret`).
+   * Multi-empresa: el caller lo resuelve por empresa y lo pasa explícito.
+   * Si se omite, cae a `process.env.WOMPI_INTEGRITY_SECRET` (compat legacy /
+   * single-tenant). Lanza si no hay ninguno.
+   */
+  integritySecret?: string | null;
 }
 
 export function generateIntegritySignature(input: IntegrityInput): string {
-  const secret = process.env.WOMPI_INTEGRITY_SECRET;
+  const secret = input.integritySecret ?? process.env.WOMPI_INTEGRITY_SECRET;
   if (!secret) {
     throw new Error(
-      'WOMPI_INTEGRITY_SECRET no está configurado. Es requerido cuando WOMPI_MODE=real.',
+      'Wompi integrity secret no configurado (wompi_integrity_secret de la empresa, ' +
+        'o WOMPI_INTEGRITY_SECRET). Es requerido cuando wompi_mode=real.',
     );
   }
   const { reference, amountInCents, currency, expirationTime } = input;
@@ -76,15 +84,22 @@ export function extractEventChecksum(
  *   5. Comparar (case-insensitive) con el checksum recibido (header o body).
  *
  * `headerChecksum` opcional: si está, gana sobre `signature.checksum`.
+ *
+ * `eventsSecret`: secret de eventos de la empresa
+ * (`wompiConfigFor(companyId).eventsSecret`). Multi-empresa: el caller lo
+ * resuelve por empresa y lo pasa explícito. Si se omite, cae a
+ * `process.env.WOMPI_EVENTS_SECRET` (compat legacy). Lanza si no hay ninguno.
  */
 export function verifyWebhookSignature(
   event: WompiEventLike,
   headerChecksum?: string | null,
+  eventsSecret?: string | null,
 ): boolean {
-  const secret = process.env.WOMPI_EVENTS_SECRET;
+  const secret = eventsSecret ?? process.env.WOMPI_EVENTS_SECRET;
   if (!secret) {
     throw new Error(
-      'WOMPI_EVENTS_SECRET no está configurado. Es requerido cuando WOMPI_MODE=real.',
+      'Wompi events secret no configurado (wompi_events_secret de la empresa, ' +
+        'o WOMPI_EVENTS_SECRET). Es requerido cuando wompi_mode=real.',
     );
   }
 

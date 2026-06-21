@@ -13,12 +13,28 @@
  *    producción.
  */
 
-/** Prefijos públicos: cualquier ruta que empiece con uno de estos no pide sesión. */
+/**
+ * Prefijos públicos: cualquier ruta que empiece con uno de estos no pide sesión.
+ *
+ * Multi-empresa (cambio de matching): los webhooks pasaron a llevar el
+ * `<companyId>` en el path (`/api/webhooks/kapso/<companyId>`,
+ * `/api/webhooks/wompi/<companyId>`). El prefijo `/api/webhooks/` los cubre a
+ * todos por igual, así que no hace falta listar cada empresa. El checkout sigue
+ * SIN `<companyId>` en el path (el secreto es el `orderId`; la empresa se
+ * resuelve desde el `order`).
+ *
+ * Las rutas de negocio que antes eran públicas para la tienda
+ * (`GET /api/zones`, `GET /api/promotions/active`, `POST /api/quotes`) se movieron
+ * bajo `/api/<companyId>/...` y son del PANEL (con `withTenant`). La tienda ya no
+ * las consume por HTTP público: el catálogo público va por las rutas públicas con
+ * empresa (`/api/products/available?company=<slug>`), y el bot interno no pega a
+ * rutas HTTP. Por eso se quitan de la allowlist (ver PUBLIC_METHOD_PATHS abajo).
+ */
 const PUBLIC_PREFIXES = [
   '/api/health',
   '/api/auth/',
-  '/api/webhooks/',
-  '/api/wompi/webhook',
+  '/api/webhooks/', // incl. /api/webhooks/{kapso,wompi}/<companyId>
+  '/api/wompi/webhook', // legacy: webhook Wompi single-tenant (compat)
   '/api/products/available',
   '/api/cron/',
   '/api/checkout/', // la tienda web (secreto = orderId); CORS propio en cada route
@@ -27,20 +43,19 @@ const PUBLIC_PREFIXES = [
 /**
  * Endpoints públicos por (método, ruta exacta). El bot y la tienda los llaman
  * sin sesión de admin. Se usa match EXACTO (no prefijo) para no exponer las
- * rutas hijas: `GET /api/zones` es público pero `PATCH /api/zones/:id` (admin) no.
+ * rutas hijas.
+ *
+ * Multi-empresa: `POST /api/orders`, `GET /api/zones`, `GET /api/promotions/active`
+ * y `POST /api/quotes` se movieron a `/api/<companyId>/...` (panel, `withTenant`)
+ * y dejaron de ser públicos. La creación de pedidos del bot y el catálogo de la
+ * tienda viajan ahora scopeados por empresa (checkout / products-available). Solo
+ * queda público `POST /api/leads` (plataforma, landing de marketing).
  */
 const PUBLIC_METHOD_PATHS: Array<{ method: string; pathname: string }> = [
-  { method: 'POST', pathname: '/api/orders' }, // el bot crea pedido para el cliente
-  { method: 'POST', pathname: '/api/quotes' }, // el bot cotiza
-  { method: 'GET', pathname: '/api/zones' },    // la tienda lista zonas
-  // GET /api/promotions/active: lo consume la tienda web (PromoActiveCard
-  // arriba del catálogo + lista del OrderPanel + badges en cada ProductCard).
-  // Solo devuelve promos activas vigentes AHORA — el CRUD /api/promotions
-  // (POST/PATCH/DELETE y GET completo) sigue privado.
-  { method: 'GET', pathname: '/api/promotions/active' },
   // POST /api/leads: la landing (/pre-registro) captura leads de la campaña.
-  // Público (sin sesión admin); el origen del sitio de marketing debe estar en
-  // EXTRA_CORS_ORIGINS para que el middleware le responda CORS.
+  // Público (sin sesión admin); es de PLATAFORMA (no de empresa). El origen del
+  // sitio de marketing debe estar en EXTRA_CORS_ORIGINS para que el middleware
+  // le responda CORS.
   { method: 'POST', pathname: '/api/leads' },
 ];
 
