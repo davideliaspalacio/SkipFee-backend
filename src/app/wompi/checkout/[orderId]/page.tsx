@@ -27,12 +27,22 @@ export default async function MockCheckout({
   const { data: order } = await sb
     .from('orders')
     .select(
-      'id, order_number, status, total, address, phone, payment_method, items:order_items(qty, price_at_order, product:products(name))',
+      'id, company_id, order_number, status, total, address, phone, payment_method, items:order_items(qty, price_at_order, product:products(name))',
     )
     .eq('id', orderId)
     .single();
 
   if (!order) notFound();
+
+  // Multi-empresa: el webhook ahora vive en /api/webhooks/wompi/<slug>. Resolvemos
+  // el slug de la empresa del pedido para que el form POST llegue a la ruta correcta.
+  const { data: company } = await sb
+    .from('companies')
+    .select('slug')
+    .eq('id', order.company_id)
+    .maybeSingle();
+  if (!company) notFound();
+  const webhookAction = `/api/webhooks/wompi/${company.slug}`;
 
   const items = (order.items ?? []).map(
     (i: { qty: number; price_at_order: number; product: { name: string } | { name: string }[] | null }) => ({
@@ -74,7 +84,7 @@ export default async function MockCheckout({
         Pago: {order.payment_method}
       </p>
 
-      <form action="/api/wompi/webhook" method="POST" style={{ marginTop: 32, display: 'grid', gap: 12 }}>
+      <form action={webhookAction} method="POST" style={{ marginTop: 32, display: 'grid', gap: 12 }}>
         <input type="hidden" name="orderId" value={order.id} />
         <button
           type="submit"

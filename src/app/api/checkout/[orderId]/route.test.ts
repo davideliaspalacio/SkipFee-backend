@@ -9,12 +9,15 @@ vi.mock('@/lib/db', () => ({
 
 import { GET, OPTIONS } from './route';
 
+// Multi-empresa: las filas llevan `company_id` y los pedidos también, para que
+// el filtro `.eq('company_id', order.company_id)` de los route handlers las case.
+const CO = 'co-1';
 const PRODUCTS = [
-  { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches', available: true, img: 'https://cdn/p01.jpg', description: 'Pastrami curado 7 días, mostaza dijon' },
-  { id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas', available: true, img: '', description: null },
+  { id: 'p01', company_id: CO, name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches', available: true, archived: false, img: 'https://cdn/p01.jpg', description: 'Pastrami curado 7 días, mostaza dijon' },
+  { id: 'b03', company_id: CO, name: 'Limonada', price: 4500, cat: 'Bebidas', available: true, archived: false, img: '', description: null },
 ];
 const ZONES = [
-  { id: 'poblado', name: 'El Poblado', tarifa: 4500, recargo: 1500, color: '#f00', lat: 6.2, lng: -75.5 },
+  { id: 'poblado', company_id: CO, name: 'El Poblado', tarifa: 4500, recargo: 1500, color: '#f00', lat: 6.2, lng: -75.5 },
 ];
 // Ventana de hora pico imposible (un solo minuto a las 03:00) para que las
 // aserciones de totales sean deterministas sin importar la hora real del runner.
@@ -41,7 +44,7 @@ describe('GET /api/checkout/:orderId', () => {
     // now fuera de hora pico para peakSurcharge 0
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
-      id: 'o1',
+      id: 'o1', company_id: 'co-1',
       phone: '573136913188',
       status: 'borrador',
       expires_at: future,
@@ -100,7 +103,7 @@ describe('GET /api/checkout/:orderId', () => {
   it('orden borrador sin items ⇒ cart vacío (items [], totales 0)', async () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
-      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
       address: null, zone_id: null, lat: null, lng: null, note: null,
       customer: null, items: [],
     };
@@ -116,17 +119,17 @@ describe('GET /api/checkout/:orderId', () => {
   it('cliente con cupón otorgado + producto de regalo ⇒ línea $0 en el carrito y order.gift', async () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
-      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
       address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
       customer: { name: 'Ana', email: null }, items: [],
     };
-    const giftProduct = { id: 'gift1', name: 'Postre de regalo', price: 0, cat: 'Regalo', available: true, img: '', description: null };
+    const giftProduct = { id: 'gift1', company_id: CO, name: 'Postre de regalo', price: 0, cat: 'Regalo', available: true, archived: false, img: '', description: null };
     supabaseStub = makeSupabaseStub({
       orders: { single: order },
       products: { rows: [...PRODUCTS, giftProduct] },
       zones: { rows: ZONES },
       settings: { single: { ...SETTINGS, review_gift_product_id: 'gift1' } },
-      rewards: { rows: [{ id: 'rw1', phone: '573136913188', status: 'otorgado' }] },
+      rewards: { rows: [{ id: 'rw1', company_id: CO, phone: '573136913188', status: 'otorgado' }] },
     });
     const res = await GET(getRequest(url('o1', '573136913188')), asyncParams({ orderId: 'o1' }));
     const body = await res.json();
@@ -142,7 +145,7 @@ describe('GET /api/checkout/:orderId', () => {
   it('cliente sin cupón otorgado ⇒ order.gift es null', async () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
-      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
       address: 'Cra 1', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
       customer: { name: 'Ana', email: null }, items: [],
     };
@@ -154,7 +157,7 @@ describe('GET /api/checkout/:orderId', () => {
 
   it('borrador vencida ⇒ 200 status expirada (sin order)', async () => {
     const past = new Date(Date.now() - 60_000).toISOString();
-    const order = { id: 'o1', phone: 'x', status: 'borrador', expires_at: past, items: [] };
+    const order = { id: 'o1', company_id: 'co-1', phone: 'x', status: 'borrador', expires_at: past, items: [] };
     supabaseStub = makeSupabaseStub(baseTables(order));
     const res = await GET(getRequest(url('o1')), asyncParams({ orderId: 'o1' }));
     expect(res.status).toBe(200);
@@ -171,7 +174,7 @@ describe('GET /api/checkout/:orderId', () => {
 
   it('orden ya pagada/en kanban ⇒ 200 status ya_usada + order{orderStatus, orderNumber}', async () => {
     const order = {
-      id: 'o1', phone: 'x', status: 'cocina', expires_at: null,
+      id: 'o1', company_id: 'co-1', phone: 'x', status: 'cocina', expires_at: null,
       order_number: 1234, items: [],
     };
     supabaseStub = makeSupabaseStub(baseTables(order));
@@ -184,7 +187,7 @@ describe('GET /api/checkout/:orderId', () => {
   });
 
   it('ya_usada sin order_number ⇒ orderNumber: null', async () => {
-    const order = { id: 'o1', phone: 'x', status: 'pagado', expires_at: null, items: [] };
+    const order = { id: 'o1', company_id: 'co-1', phone: 'x', status: 'pagado', expires_at: null, items: [] };
     supabaseStub = makeSupabaseStub(baseTables(order));
     const res = await GET(getRequest(url('o1')), asyncParams({ orderId: 'o1' }));
     const body = await res.json();
@@ -210,7 +213,7 @@ describe('GET /api/checkout/:orderId', () => {
     // rechazado: <msg>" y ofrecer reintentar.
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
-      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
       address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
       wompi_status_message: 'Fondos insuficientes',
       customer: { name: 'Ana', email: null },
@@ -226,7 +229,7 @@ describe('GET /api/checkout/:orderId', () => {
   it('wompiStatusMessage es null cuando la orden nunca tuvo intento de pago', async () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
-      id: 'o1', phone: '573136913188', status: 'borrador', expires_at: future,
+      id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
       address: null, zone_id: null, lat: null, lng: null, note: null,
       wompi_status_message: null,
       customer: null, items: [],

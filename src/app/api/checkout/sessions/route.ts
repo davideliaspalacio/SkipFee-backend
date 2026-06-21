@@ -21,8 +21,17 @@ export const dynamic = 'force-dynamic';
  * Si NO vienen (compat con clientes que solo manden phone), la orden queda
  * con esos campos null y el cliente los completa en la web (modo legacy).
  */
+/**
+ * Empresa por defecto (slug `bros-and-subs`) usada cuando el caller (el bot,
+ * aún sin migrar) NO especifica empresa. Coincide con el seed de la migración
+ * 0038. TODO: volver `company` requerido cuando el bot pase el companyId.
+ */
+const DEFAULT_COMPANY_ID = '00000000-0000-0000-0000-000000000001';
+
 const bodySchema = z.object({
   phone: z.string().regex(/^\d{8,15}$/, 'phone E.164 sin "+"'),
+  /** Slug de la empresa dueña del pedido. Opcional durante la transición. */
+  company: z.string().min(1).optional(),
   ttlMinutes: z.number().int().positive().max(1440).optional(),
   /** Datos del cliente. Si vienen, se hace upsert por phone. */
   customer: z
@@ -64,6 +73,22 @@ export async function POST(request: NextRequest) {
   const expiresAt = new Date(Date.now() + ttl * 60_000).toISOString();
   const sb = supabaseAdmin();
 
+  // Multi-empresa: resolver la empresa dueña del pedido. Si el caller mandó
+  // `company` (slug), lo resolvemos; si no, caemos a la empresa por defecto
+  // (el bot aún sin migrar). TODO: requerir `company` cuando el bot lo pase.
+  let companyId = DEFAULT_COMPANY_ID;
+  if (parsed.company) {
+    const { data: company } = await sb
+      .from('companies')
+      .select('id, status')
+      .eq('slug', parsed.company)
+      .maybeSingle();
+    if (!company || company.status === 'suspended') {
+      return jsonWithCors({ ok: false, error: `Empresa no encontrada: ${parsed.company}` }, 404);
+    }
+    companyId = company.id as string;
+  }
+
   // 1. Si vino dirección + zona: resolver la zona para sacar lat/lng de fallback.
   let zone: { id: string; lat: number; lng: number } | null = null;
   if (parsed.delivery) {
@@ -71,6 +96,7 @@ export async function POST(request: NextRequest) {
       .from('zones')
       .select('id, lat, lng')
       .eq('id', parsed.delivery.zoneId)
+      .eq('company_id', companyId)
       .single()) as { data: { id: string; lat: number; lng: number } | null };
     if (!z) {
       return jsonWithCors(
@@ -94,6 +120,7 @@ export async function POST(request: NextRequest) {
       const { data: existing } = await sb
         .from('customers')
         .select('id')
+        .eq('company_id', companyId)
         .eq('phone', parsed.phone)
         .maybeSingle();
       if (existing) {
@@ -101,7 +128,8 @@ export async function POST(request: NextRequest) {
         await sb
           .from('customers')
           .update({ name: parsed.customer.name, email })
-          .eq('id', (existing as { id: string }).id);
+          .eq('id', (existing as { id: string }).id)
+          .eq('company_id', companyId);
         customerId = (existing as { id: string }).id;
       }
     }
@@ -112,6 +140,7 @@ export async function POST(request: NextRequest) {
         .from('customers')
         .upsert(
           {
+            company_id: companyId,
             name: parsed.customer.name,
             phone: parsed.phone,
             addr: parsed.delivery?.address ?? '',
@@ -119,7 +148,7 @@ export async function POST(request: NextRequest) {
             email,
             tag: 'Nuevo',
           },
-          { onConflict: 'phone' },
+          { onConflict: 'company_id,phone' },
         )
         .select('id')
         .single();
@@ -134,6 +163,7 @@ export async function POST(request: NextRequest) {
   // 3. INSERT order — borrador con todo lo que vino pre-llenado.
   const insertPayload: Record<string, unknown> = {
     id: orderId,
+    company_id: companyId,
     phone: parsed.phone,
     status: 'borrador',
     expires_at: expiresAt,

@@ -2,6 +2,15 @@
  * Resolver del catálogo de mensajes: mergea los defaults del código con los
  * overrides de la tabla `bot_messages` y cachea el resultado en memoria.
  *
+ * Multi-empresa: el catálogo es POR EMPRESA. `bot_messages` tiene PK
+ * `(company_id, key)`, así que las queries se scopean con `.eq('company_id', …)`
+ * y la cache se keyea por `companyId`. Todas las funciones públicas reciben un
+ * `companyId` OPCIONAL: cuando se pasa (el bot ya migrado), lee/cachea los
+ * overrides de esa empresa; cuando NO se pasa (callers de sistema aún sin
+ * migrar: `orders/notify`, `cron/inactivity-check`, rutas `bot/messages`), cae
+ * al comportamiento legacy (cache global, query sin `company_id`) para no romper
+ * el build. Esos callers están marcados con TODO en sus archivos.
+ *
  * Garantía de robustez: si la lectura a BD falla (env ausente, red caída,
  * tabla inexistente) se usan los defaults. El bot NUNCA se rompe por esto.
  */
@@ -35,8 +44,26 @@ interface OverrideRow {
 
 const CACHE_TTL_MS = 60_000;
 
-let cache: { at: number; map: Map<string, ResolvedMessage> } | null = null;
-let inflight: Promise<Map<string, ResolvedMessage>> | null = null;
+/** Clave de cache: el companyId, o '__global__' para el modo legacy sin empresa. */
+const GLOBAL_KEY = '__global__';
+
+interface CacheSlot {
+  cache: { at: number; map: Map<string, ResolvedMessage> } | null;
+  inflight: Promise<Map<string, ResolvedMessage>> | null;
+}
+
+/** Una entrada de cache por empresa (más la global legacy). */
+const slots = new Map<string, CacheSlot>();
+
+function slotFor(companyId?: string): CacheSlot {
+  const key = companyId ?? GLOBAL_KEY;
+  let slot = slots.get(key);
+  if (!slot) {
+    slot = { cache: null, inflight: null };
+    slots.set(key, slot);
+  }
+  return slot;
+}
 
 function resolveOne(def: MessageDef, override?: OverrideRow): ResolvedMessage {
   const hasOverride = !!override?.content;
@@ -60,11 +87,15 @@ function buildDefaultsMap(): Map<string, ResolvedMessage> {
   return map;
 }
 
-async function fetchOverrides(): Promise<OverrideRow[]> {
+async function fetchOverrides(companyId?: string): Promise<OverrideRow[]> {
   try {
-    const { data, error } = await supabaseAdmin()
+    let query = supabaseAdmin()
       .from('bot_messages')
       .select('key, content, enabled, updated_at');
+    // Multi-empresa: solo los overrides de ESTA empresa. Sin companyId (legacy),
+    // lee toda la tabla (compat single-tenant).
+    if (companyId) query = query.eq('company_id', companyId);
+    const { data, error } = await query;
     if (error || !data) return [];
     return data as OverrideRow[];
   } catch {
@@ -73,34 +104,35 @@ async function fetchOverrides(): Promise<OverrideRow[]> {
   }
 }
 
-async function buildCatalog(): Promise<Map<string, ResolvedMessage>> {
-  const overrides = await fetchOverrides();
+async function buildCatalog(companyId?: string): Promise<Map<string, ResolvedMessage>> {
+  const overrides = await fetchOverrides(companyId);
   const byKey = new Map(overrides.map(o => [o.key, o]));
   const map = new Map<string, ResolvedMessage>();
   for (const def of MESSAGE_DEFS_LIST) map.set(def.key, resolveOne(def, byKey.get(def.key)));
   return map;
 }
 
-async function loadCatalog(): Promise<Map<string, ResolvedMessage>> {
+async function loadCatalog(companyId?: string): Promise<Map<string, ResolvedMessage>> {
+  const slot = slotFor(companyId);
   const now = Date.now();
-  if (cache && now - cache.at < CACHE_TTL_MS) return cache.map;
-  if (inflight) return inflight;
-  inflight = buildCatalog()
+  if (slot.cache && now - slot.cache.at < CACHE_TTL_MS) return slot.cache.map;
+  if (slot.inflight) return slot.inflight;
+  slot.inflight = buildCatalog(companyId)
     .then(map => {
-      cache = { at: Date.now(), map };
-      inflight = null;
+      slot.cache = { at: Date.now(), map };
+      slot.inflight = null;
       return map;
     })
     .catch(() => {
-      inflight = null;
+      slot.inflight = null;
       return buildDefaultsMap();
     });
-  return inflight;
+  return slot.inflight;
 }
 
-/** Resuelve un mensaje por key (default ⊕ override). Nunca lanza. */
-export async function getMessage(key: string): Promise<ResolvedMessage> {
-  const map = await loadCatalog();
+/** Resuelve un mensaje por key (default ⊕ override) de la empresa. Nunca lanza. */
+export async function getMessage(key: string, companyId?: string): Promise<ResolvedMessage> {
+  const map = await loadCatalog(companyId);
   const found = map.get(key);
   if (found) return found;
   const def = MESSAGE_DEFS[key];
@@ -110,14 +142,14 @@ export async function getMessage(key: string): Promise<ResolvedMessage> {
 }
 
 /** Palabras gatillo de un mensaje `keywords.*` (o [] si no aplica). */
-export async function getKeywords(key: string): Promise<string[]> {
-  const m = await getMessage(key);
+export async function getKeywords(key: string, companyId?: string): Promise<string[]> {
+  const m = await getMessage(key, companyId);
   return m.words ?? [];
 }
 
-/** Todos los mensajes resueltos, en orden del catálogo. */
-export async function getAllMessages(): Promise<ResolvedMessage[]> {
-  const map = await loadCatalog();
+/** Todos los mensajes resueltos de la empresa, en orden del catálogo. */
+export async function getAllMessages(companyId?: string): Promise<ResolvedMessage[]> {
+  const map = await loadCatalog(companyId);
   return MESSAGE_DEFS_LIST.map(d => map.get(d.key)!).filter(Boolean);
 }
 
@@ -150,8 +182,8 @@ export interface AdminMessage {
 }
 
 /** Catálogo completo para el panel admin (metadata + contenido resuelto). */
-export async function getAdminCatalog(): Promise<AdminMessage[]> {
-  const map = await loadCatalog();
+export async function getAdminCatalog(companyId?: string): Promise<AdminMessage[]> {
+  const map = await loadCatalog(companyId);
   return MESSAGE_DEFS_LIST.map(def => {
     const r = map.get(def.key)!;
     return {
@@ -171,8 +203,14 @@ export async function getAdminCatalog(): Promise<AdminMessage[]> {
   });
 }
 
-/** Invalida la cache (lo llama el PATCH tras guardar un override). */
-export function invalidateCatalog(): void {
-  cache = null;
-  inflight = null;
+/**
+ * Invalida la cache de una empresa (lo llama el PATCH tras guardar un override).
+ * Sin companyId limpia TODAS las entradas (legacy + todas las empresas).
+ */
+export function invalidateCatalog(companyId?: string): void {
+  if (companyId === undefined) {
+    slots.clear();
+    return;
+  }
+  slots.delete(companyId);
 }

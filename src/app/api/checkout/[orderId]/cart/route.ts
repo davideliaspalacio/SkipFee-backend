@@ -65,10 +65,10 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
 
   const { data: order } = (await sb
     .from('orders')
-    .select('id, status, expires_at, zone_id, phone')
+    .select('id, company_id, status, expires_at, zone_id, phone')
     .eq('id', orderId)
     .single()) as {
-    data: { id: string; status: string; expires_at: string | null; zone_id: string | null; phone: string } | null;
+    data: { id: string; company_id: string; status: string; expires_at: string | null; zone_id: string | null; phone: string } | null;
   };
 
   const status = classifyOrder(order, new Date());
@@ -82,13 +82,17 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     );
   }
 
+  // Multi-empresa: TODO se scopea por la empresa del pedido (`order.company_id`).
+  const companyId = order.company_id;
+
   // Catálogo + zona + settings + promos activas (todos en paralelo).
   // Las promos las filtra `computeOrderTotals` por aplicabilidad real.
   const [{ data: products }, { data: settings }, { data: promotions }] = await Promise.all([
-    sb.from('products').select('id, name, price, cat, available'),
-    sb.from('settings').select('peak_start, peak_end, base_delivery_fee, review_gift_product_id').eq('id', 1).single(),
+    sb.from('products').select('id, name, price, cat, available').eq('company_id', companyId),
+    sb.from('settings').select('peak_start, peak_end, base_delivery_fee, review_gift_product_id').eq('company_id', companyId).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
+      .eq('company_id', companyId)
       .eq('active', true)
       .eq('archived', false),
   ]);
@@ -107,6 +111,7 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
       .from('zones')
       .select('id, name, tarifa, recargo, color, lat, lng')
       .eq('id', zoneId)
+      .eq('company_id', companyId)
       .single()) as { data: (TotalsZone & { color?: string }) | null };
     if (!z) {
       return jsonWithCors({ ok: false, error: `Zona no existe: ${zoneId}` }, 400);
@@ -163,7 +168,7 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
   }
 
   if (totals.itemsToInsert.length > 0) {
-    const rows = totals.itemsToInsert.map(i => ({ ...i, order_id: orderId }));
+    const rows = totals.itemsToInsert.map(i => ({ ...i, order_id: orderId, company_id: companyId }));
     const { error: insErr } = await sb.from('order_items').insert(rows);
     if (insErr) {
       console.error('[checkout cart] insert items error', insErr);
@@ -198,7 +203,7 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
     if (lng !== null) update.lng = lng;
   }
 
-  const { error: updErr } = await sb.from('orders').update(update).eq('id', orderId);
+  const { error: updErr } = await sb.from('orders').update(update).eq('id', orderId).eq('company_id', companyId);
   if (updErr) {
     console.error('[checkout cart] update order error', updErr);
     return jsonWithCors({ ok: false, error: updErr.message }, 500);
@@ -215,7 +220,7 @@ export async function PUT(request: NextRequest, ctx: { params: Promise<{ orderId
 
   // Postre de regalo (Tarea 3): se muestra como línea $0 en el carrito (igual que
   // en el GET). No se persiste en order_items hasta pagar (redeemRewardForOrder).
-  const giftLine = await giftCartLine(sb, order.phone);
+  const giftLine = await giftCartLine(sb, order.phone, undefined, companyId);
   const items: Cart['items'] = [...totals.items];
   if (giftLine) items.push(giftLine);
 

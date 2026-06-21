@@ -55,7 +55,15 @@ const payloadSchema = z
   })
   .passthrough();
 
-export async function handleMessageReceived(payload: unknown): Promise<void> {
+export async function handleMessageReceived(
+  payload: unknown,
+  /**
+   * Empresa que recibe el webhook (multi-empresa). Cuando se pasa, el chat/mensaje
+   * se persisten con `company_id` y el `chats.id` toma el formato
+   * `wa:<companyId>:<phone>`; las queries de `chats` se scopean por empresa.
+   */
+  companyId?: string,
+): Promise<void> {
   const parsed = payloadSchema.safeParse(payload);
   if (!parsed.success) {
     console.warn('[message-received] payload no matchea schema', {
@@ -90,7 +98,7 @@ export async function handleMessageReceived(payload: unknown): Promise<void> {
   const mediaUrl =
     message.type === 'image' ? message.image?.link ?? message.image?.url ?? null : null;
 
-  // 1. Persistir el mensaje entrante
+  // 1. Persistir el mensaje entrante (scopeado por empresa cuando hay companyId)
   const { chatId } = await recordMessage({
     phone,
     direction: 'in',
@@ -98,21 +106,26 @@ export async function handleMessageReceived(payload: unknown): Promise<void> {
     kapsoMessageId: message.id,
     name: contactName,
     mediaUrl,
+    companyId,
   });
 
   // 2. Si chat está en modo bot, procesar con el state machine (fire-and-forget)
-  const { data: chat } = await supabaseAdmin()
-    .from('chats')
-    .select('status')
-    .eq('id', chatId)
-    .single();
+  let chatQuery = supabaseAdmin().from('chats').select('status').eq('id', chatId);
+  if (companyId) chatQuery = chatQuery.eq('company_id', companyId);
+  const { data: chat } = await chatQuery.single();
 
   if (chat?.status === 'bot') {
     const incoming = parseIncoming(message);
     // Fire-and-forget: el webhook ya devolvió 200 a Kapso. Si el flujo del
     // bot falla, escalamos a humano automáticamente para que el cliente
     // no quede colgado sin respuesta y la operaria tenga contexto.
-    void processFlowMessage({ chatId, phone, contactName, message: incoming }).catch(async err => {
+    // NOTA multi-empresa: pasamos `companyId` al entrypoint del bot. La firma
+    // de `processFlowMessage` en `lib/bot/flow` aún no lo declara (no editamos
+    // lib/bot/** en esta tarea); se pasa como campo extra del opts (cast para
+    // evitar el error de excess-property) para que, cuando el bot se haga
+    // consciente de empresa, lo lea sin cambiar este caller.
+    const botOpts = { chatId, phone, contactName, message: incoming, companyId };
+    void processFlowMessage(botOpts as Parameters<typeof processFlowMessage>[0]).catch(async err => {
       console.error('[bot] error en processFlowMessage', { chatId, err });
       const { manejarErrorInesperado } = await import('@/lib/bot/flow/handlers');
       await manejarErrorInesperado({ chatId, phone });

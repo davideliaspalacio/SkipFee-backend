@@ -44,26 +44,31 @@ describe('POST /api/cron/survey-dispatch', () => {
     expect(sendDeliverySurveyMock).not.toHaveBeenCalled();
   });
 
-  it('encuesta apagada en settings ⇒ no consulta pedidos', async () => {
-    supabaseStub = makeSupabaseStub({ settings: { single: { survey_enabled: false } } });
+  it('encuesta apagada en settings de la empresa ⇒ no consulta pedidos', async () => {
+    supabaseStub = makeSupabaseStub({
+      companies: { rows: [{ id: 'c1', status: 'active' }] },
+      settings: { single: { survey_enabled: false } },
+    });
     const res = await POST(req('secret-123'));
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body.disabled).toBe(true);
+    expect(body.candidates).toBe(0);
+    expect(body.sent).toBe(0);
     expect(sendDeliverySurveyMock).not.toHaveBeenCalled();
   });
 
   it('despacha la encuesta solo para entregados SIN encuesta previa', async () => {
     supabaseStub = makeSupabaseStub({
+      companies: { rows: [{ id: 'c1', status: 'active' }] },
       settings: { single: { survey_enabled: true, survey_delay_minutes: 30 } },
       orders: {
         rows: [
-          { id: 'o1', phone: '573001', status: 'entregado', delivered_at: '2026-06-09T12:00:00Z' },
-          { id: 'o2', phone: '573002', status: 'entregado', delivered_at: '2026-06-09T12:00:00Z' },
+          { id: 'o1', phone: '573001', status: 'entregado', delivered_at: '2026-06-09T12:00:00Z', company_id: 'c1' },
+          { id: 'o2', phone: '573002', status: 'entregado', delivered_at: '2026-06-09T12:00:00Z', company_id: 'c1' },
         ],
       },
       // o1 ya tiene la encuesta enviada → se descarta; o2 no.
-      order_surveys: { rows: [{ order_id: 'o1', sent_at: '2026-06-09T12:31:00Z' }] },
+      order_surveys: { rows: [{ order_id: 'o1', sent_at: '2026-06-09T12:31:00Z', company_id: 'c1' }] },
     });
     const res = await POST(req('secret-123'));
     expect(res.status).toBe(200);
@@ -72,15 +77,16 @@ describe('POST /api/cron/survey-dispatch', () => {
     expect(body.sent).toBe(1);
     expect(sendDeliverySurveyMock).toHaveBeenCalledTimes(1);
     expect(sendDeliverySurveyMock).toHaveBeenCalledWith(
-      expect.objectContaining({ orderId: 'o2', phone: '573002' }),
+      expect.objectContaining({ orderId: 'o2', phone: '573002', companyId: 'c1' }),
     );
   });
 
   it('cuenta como skipped cuando sendDeliverySurvey no envía (humano / mid-order)', async () => {
     sendDeliverySurveyMock.mockResolvedValue({ sent: false, skipped: 'human' });
     supabaseStub = makeSupabaseStub({
+      companies: { rows: [{ id: 'c1', status: 'active' }] },
       settings: { single: { survey_enabled: true, survey_delay_minutes: 30 } },
-      orders: { rows: [{ id: 'o1', phone: '573001', status: 'entregado', delivered_at: '2026-06-09T12:00:00Z' }] },
+      orders: { rows: [{ id: 'o1', phone: '573001', status: 'entregado', delivered_at: '2026-06-09T12:00:00Z', company_id: 'c1' }] },
       order_surveys: { rows: [] },
     });
     const res = await POST(req('secret-123'));

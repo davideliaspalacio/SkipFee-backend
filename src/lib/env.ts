@@ -2,9 +2,17 @@ import { z } from 'zod';
 
 const schema = z.object({
   // --- Kapso ---
-  KAPSO_API_KEY: z.string().min(1),
-  KAPSO_WEBHOOK_SECRET: z.string().min(1),
-  KAPSO_PHONE_NUMBER_ID: z.string().min(1),
+  // Multi-empresa: las credenciales Kapso ahora viven POR EMPRESA en
+  // `company_integrations` (ver `lib/integrations.ts`). Ya NO son requeridas en
+  // el env global → el server arranca sin ellas. Usamos `.default('')` (no
+  // `.optional()`) para que el tipo siga siendo `string` y los callers legacy
+  // que aún las leen (`lib/kapso/*`, webhook Kapso sin migrar) compilen igual;
+  // si faltan, las llamadas a Kapso fallarán en runtime (como antes con una
+  // credencial inválida), pero el arranque no se rompe. La ruta correcta
+  // multi-empresa es `kapsoFor(companyId)`.
+  KAPSO_API_KEY: z.string().default(''),
+  KAPSO_WEBHOOK_SECRET: z.string().default(''),
+  KAPSO_PHONE_NUMBER_ID: z.string().default(''),
 
   // --- Supabase ---
   // URL del proyecto, ej: https://xxxx.supabase.co

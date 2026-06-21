@@ -22,37 +22,44 @@ export interface GiftCartLine {
   gift: true;
 }
 
+/**
+ * Multi-empresa: `companyId` (opcional) scopea rewards/settings/products a la
+ * empresa del pedido para no cruzar datos. Cuando se omite (callers legacy aún
+ * sin migrar) cae al comportamiento single-tenant (sin filtro de empresa;
+ * `settings` por `id=1`).
+ */
 export async function giftCartLine(
   sb: SupabaseClient,
   phone: string,
   nowIso: string = new Date().toISOString(),
+  companyId?: string,
 ): Promise<GiftCartLine | null> {
-  // ¿Reward 'otorgado' vigente del cliente?
-  const { data: rewards } = await sb
+  // ¿Reward 'otorgado' vigente del cliente (de ESTA empresa)?
+  let rewardsQuery = sb
     .from('rewards')
     .select('id')
     .eq('phone', phone)
     .eq('status', 'otorgado')
-    .or(`expires_at.is.null,expires_at.gt.${nowIso}`)
-    .limit(1);
+    .or(`expires_at.is.null,expires_at.gt.${nowIso}`);
+  if (companyId) rewardsQuery = rewardsQuery.eq('company_id', companyId);
+  const { data: rewards } = await rewardsQuery.limit(1);
   if (!rewards || rewards.length === 0) return null;
 
   // ¿Producto de regalo configurado en Configuración → Reseñas?
-  const { data: settings } = await sb
-    .from('settings')
-    .select('review_gift_product_id')
-    .eq('id', 1)
-    .maybeSingle();
+  let settingsQuery = sb.from('settings').select('review_gift_product_id');
+  settingsQuery = companyId ? settingsQuery.eq('company_id', companyId) : settingsQuery.eq('id', 1);
+  const { data: settings } = await settingsQuery.maybeSingle();
   const productId = (settings as { review_gift_product_id?: string | null } | null)?.review_gift_product_id;
   if (!productId) return null;
 
   // El producto debe existir y NO estar archivado (un producto archivado
   // ya no se entrega como regalo aunque siga vinculado en settings).
-  const { data: product } = await sb
+  let productQuery = sb
     .from('products')
     .select('id, name, archived')
-    .eq('id', productId)
-    .maybeSingle();
+    .eq('id', productId);
+  if (companyId) productQuery = productQuery.eq('company_id', companyId);
+  const { data: product } = await productQuery.maybeSingle();
   if (!product || (product as { archived?: boolean }).archived) return null;
 
   return {

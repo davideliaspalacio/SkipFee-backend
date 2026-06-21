@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { sendText } from '@/lib/kapso/client';
+import { kapsoFor } from '@/lib/integrations';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
@@ -62,8 +63,16 @@ export async function notifyOrderStatus(opts: {
   sb: SupabaseClient;
   order: NotifyOrder;
   newStatus: string;
+  /**
+   * Empresa del pedido (multi-empresa). OPCIONAL y retrocompatible (mismo patrón
+   * que `lib/orders/rewards.ts`): cuando se pasa, el WhatsApp se envía con las
+   * credenciales Kapso de ESA empresa (`kapsoFor`), el mensaje se persiste con
+   * `company_id` y la update de `orders` se scopea por empresa. Sin él, mantiene
+   * el comportamiento legacy (env global + chat sin company_id).
+   */
+  companyId?: string;
 }): Promise<NotifyResult> {
-  const { sb, order, newStatus } = opts;
+  const { sb, order, newStatus, companyId } = opts;
 
   if (!isNotifiable(newStatus)) return { sent: false, skipped: 'not-notifiable' };
 
@@ -73,14 +82,18 @@ export async function notifyOrderStatus(opts: {
   const body = await messageFor(newStatus, firstNameOf(order));
 
   try {
-    const result = await sendText(order.phone, body);
+    const result = companyId
+      ? await (await kapsoFor(companyId)).sendText(order.phone, body)
+      : await sendText(order.phone, body);
     const wamid = result?.messages?.[0]?.id ?? null;
-    await recordMessage({ phone: order.phone, direction: 'bot', body, kapsoMessageId: wamid });
+    await recordMessage({ phone: order.phone, direction: 'bot', body, kapsoMessageId: wamid, companyId });
 
-    const { error } = await sb
+    let updateQuery = sb
       .from('orders')
       .update({ notified_statuses: [...already, newStatus] })
       .eq('id', order.id);
+    if (companyId) updateQuery = updateQuery.eq('company_id', companyId);
+    const { error } = await updateQuery;
     if (error) {
       // El mensaje ya salió; loguear pero no fallar (podría re-notificar si se
       // revisita el estado, pero es mejor eso que romper el cambio de estado).

@@ -4,6 +4,7 @@ import { supabaseAdmin } from '@/lib/db';
 import { jsonWithCors, preflight } from '@/lib/checkout/cors';
 import { classifyOrder } from '@/lib/checkout/shape';
 import { generateIntegritySignature } from '@/lib/wompi/signature';
+import { wompiConfigFor } from '@/lib/integrations';
 import { loadOpenState } from '@/lib/hours';
 
 export const runtime = 'nodejs';
@@ -55,12 +56,13 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
 
   const { data: order } = (await sb
     .from('orders')
-    .select('id, phone, status, expires_at, address, zone_id, lat, lng, total, items:order_items(qty, price_at_order)')
+    .select('id, company_id, phone, status, expires_at, address, zone_id, lat, lng, total, items:order_items(qty, price_at_order)')
     .eq('id', orderId)
     .single()) as {
     data:
       | {
           id: string;
+          company_id: string;
           phone: string;
           status: string;
           expires_at: string | null;
@@ -105,12 +107,13 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
     return jsonWithCors({ ok: false, error: 'Falta información para pagar', missing }, 400);
   }
 
-  // Upsert customer por phone (UNIQUE).
+  // Upsert customer por (company_id, phone) — UNIQUE por empresa (migración 0038).
   const email = parsed.customer.email && parsed.customer.email !== '' ? parsed.customer.email : null;
   const { data: customer, error: custErr } = await sb
     .from('customers')
     .upsert(
       {
+        company_id: order.company_id,
         name: parsed.customer.name,
         phone: order.phone,
         addr: order.address ?? '',
@@ -118,7 +121,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
         email,
         tag: 'Nuevo',
       },
-      { onConflict: 'phone' },
+      { onConflict: 'company_id,phone' },
     )
     .select('id')
     .single();
@@ -135,7 +138,11 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
   };
   if (parsed.note !== undefined) update.note = parsed.note;
 
-  const { error: updErr } = await sb.from('orders').update(update).eq('id', orderId);
+  const { error: updErr } = await sb
+    .from('orders')
+    .update(update)
+    .eq('id', orderId)
+    .eq('company_id', order.company_id);
   if (updErr) {
     console.error('[checkout pay] order update error', updErr);
     return jsonWithCors({ ok: false, error: updErr.message }, 500);
@@ -143,14 +150,16 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
 
   const total = order.total ?? 0;
 
-  // Dispatch según WOMPI_MODE: mock → paymentLink local, real → widgetConfig
-  // para el Widget oficial. El frontend nuevo chequea widgetConfig primero y
-  // cae a paymentLink si es null (compat).
-  if ((process.env.WOMPI_MODE ?? 'mock') === 'real') {
-    const publicKey = process.env.WOMPI_PUBLIC_KEY;
+  // Config Wompi POR EMPRESA (multi-empresa): mode + credenciales viven en
+  // company_integrations, no en el env global. Dispatch según mode: mock →
+  // paymentLink local, real → widgetConfig para el Widget oficial. El frontend
+  // chequea widgetConfig primero y cae a paymentLink si es null (compat).
+  const wompi = await wompiConfigFor(order.company_id);
+  if (wompi.mode === 'real') {
+    const publicKey = wompi.publicKey;
     if (!publicKey) {
       return jsonWithCors(
-        { ok: false, error: 'WOMPI_PUBLIC_KEY no configurado (requerido con WOMPI_MODE=real)' },
+        { ok: false, error: 'wompi_public_key no configurado para la empresa (requerido con wompi_mode=real)' },
         500,
       );
     }
@@ -160,6 +169,7 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
         reference: orderId,
         amountInCents: total * 100,
         currency: 'COP',
+        integritySecret: wompi.integritySecret,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'integrity signature error';

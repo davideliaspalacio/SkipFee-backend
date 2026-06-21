@@ -25,6 +25,11 @@ export const dynamic = 'force-dynamic';
  * (`order_id` UNIQUE); descartamos los que ya tienen `sent_at`. Además
  * `sendDeliverySurvey` saltea chats en humano, a mitad de otro flujo, o
  * encuestados hace poco (survey_min_days).
+ *
+ * Multi-empresa: pg_cron llama un endpoint global; iteramos por empresa activa.
+ * `settings` (switch + delay) y `orders` se leen scopeados por `company_id`, y
+ * `sendDeliverySurvey` recibe `companyId` para enviar con el Kapso de la empresa
+ * y scopear sus lookups (settings/chat/order_surveys).
  */
 export async function POST(request: NextRequest) {
   const secret = request.headers.get('x-cron-secret');
@@ -39,57 +44,80 @@ export async function POST(request: NextRequest) {
   const sb = supabaseAdmin();
   const now = new Date();
 
-  // Switch + delay configurables (Configuración → Reseñas).
-  const { data: settings } = await sb
-    .from('settings')
-    .select('survey_enabled, survey_delay_minutes')
-    .eq('id', 1)
-    .maybeSingle();
-  if ((settings?.survey_enabled ?? true) === false) {
-    return Response.json({ ok: true, checkedAt: now.toISOString(), candidates: 0, sent: 0, skipped: 0, disabled: true });
-  }
-  const delayMin = (settings as { survey_delay_minutes?: number } | null)?.survey_delay_minutes ?? 30;
+  const { data: companies, error: companiesErr } = await sb
+    .from('companies')
+    .select('id')
+    .eq('status', 'active');
 
-  // Ventana: entregado hace ≥ delayMin (delivered_at < cutoff) y ≤ 24 h (≥ floor).
-  const cutoff = new Date(now.getTime() - delayMin * 60_000).toISOString();
-  const floor = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
-
-  const { data: orders, error } = await sb
-    .from('orders')
-    .select('id, phone, delivered_at')
-    .eq('status', 'entregado')
-    .gte('delivered_at', floor)
-    .lt('delivered_at', cutoff);
-
-  if (error) {
-    console.error('[cron/survey-dispatch] query error', error);
-    return Response.json({ ok: false, error: error.message }, { status: 500 });
+  if (companiesErr) {
+    console.error('[cron/survey-dispatch] companies error', companiesErr);
+    return Response.json({ ok: false, error: companiesErr.message }, { status: 500 });
   }
 
-  const candidates = (orders ?? []) as Array<{ id: string; phone: string }>;
-
-  // Descartar los pedidos que ya tienen la encuesta enviada (order_surveys.sent_at).
-  let pending = candidates;
-  if (candidates.length > 0) {
-    const ids = candidates.map(o => o.id);
-    const { data: existing } = await sb
-      .from('order_surveys')
-      .select('order_id, sent_at')
-      .in('order_id', ids);
-    const sentIds = new Set(
-      ((existing ?? []) as Array<{ order_id: string; sent_at: string | null }>)
-        .filter(s => s.sent_at)
-        .map(s => s.order_id),
-    );
-    pending = candidates.filter(o => !sentIds.has(o.id));
-  }
-
+  let totalCandidates = 0;
   let sent = 0;
   let skipped = 0;
-  for (const order of pending) {
-    const result = await sendDeliverySurvey({ sb, orderId: order.id, phone: order.phone });
-    if (result.sent) sent++;
-    else skipped++;
+
+  for (const company of companies ?? []) {
+    const companyId = company.id as string;
+
+    // Switch + delay configurables por empresa (Configuración → Reseñas).
+    const { data: settings } = await sb
+      .from('settings')
+      .select('survey_enabled, survey_delay_minutes')
+      .eq('company_id', companyId)
+      .maybeSingle();
+    if ((settings?.survey_enabled ?? true) === false) continue; // empresa con encuesta apagada
+    const delayMin =
+      (settings as { survey_delay_minutes?: number } | null)?.survey_delay_minutes ?? 30;
+
+    // Ventana: entregado hace ≥ delayMin (delivered_at < cutoff) y ≤ 24 h (≥ floor).
+    const cutoff = new Date(now.getTime() - delayMin * 60_000).toISOString();
+    const floor = new Date(now.getTime() - 24 * 60 * 60_000).toISOString();
+
+    const { data: orders, error } = await sb
+      .from('orders')
+      .select('id, phone, delivered_at')
+      .eq('company_id', companyId)
+      .eq('status', 'entregado')
+      .gte('delivered_at', floor)
+      .lt('delivered_at', cutoff);
+
+    if (error) {
+      console.error('[cron/survey-dispatch] query error', { companyId, error });
+      continue;
+    }
+
+    const candidates = (orders ?? []) as Array<{ id: string; phone: string }>;
+    totalCandidates += candidates.length;
+
+    // Descartar los pedidos que ya tienen la encuesta enviada (order_surveys.sent_at).
+    let pending = candidates;
+    if (candidates.length > 0) {
+      const ids = candidates.map(o => o.id);
+      const { data: existing } = await sb
+        .from('order_surveys')
+        .select('order_id, sent_at')
+        .eq('company_id', companyId)
+        .in('order_id', ids);
+      const sentIds = new Set(
+        ((existing ?? []) as Array<{ order_id: string; sent_at: string | null }>)
+          .filter(s => s.sent_at)
+          .map(s => s.order_id),
+      );
+      pending = candidates.filter(o => !sentIds.has(o.id));
+    }
+
+    for (const order of pending) {
+      const result = await sendDeliverySurvey({
+        sb,
+        orderId: order.id,
+        phone: order.phone,
+        companyId,
+      });
+      if (result.sent) sent++;
+      else skipped++;
+    }
   }
 
   if (sent > 0) {
@@ -99,7 +127,7 @@ export async function POST(request: NextRequest) {
   return Response.json({
     ok: true,
     checkedAt: now.toISOString(),
-    candidates: candidates.length,
+    candidates: totalCandidates,
     sent,
     skipped,
   });

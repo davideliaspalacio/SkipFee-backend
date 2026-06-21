@@ -104,14 +104,21 @@ export function computeOpenState(row: SettingsLike | null | undefined, now: Date
   return { open, paused: false, opensLabel: open ? null : nextOpeningLabel(week, now) };
 }
 
-/** Lee settings y calcula el estado abierto/cerrado. Fail-open ante cualquier error. */
-export async function loadOpenState(sb: SupabaseClient, now: Date = new Date()): Promise<OpenState> {
+/**
+ * Lee settings y calcula el estado abierto/cerrado. Fail-open ante cualquier error.
+ *
+ * Multi-empresa: `companyId` (opcional) scopea `settings` a la empresa del
+ * pedido. Sin él (callers legacy) cae al single-tenant (`settings.id = 1`).
+ */
+export async function loadOpenState(
+  sb: SupabaseClient,
+  now: Date = new Date(),
+  companyId?: string,
+): Promise<OpenState> {
   try {
-    const { data, error } = await sb
-      .from('settings')
-      .select('hours, orders_paused')
-      .eq('id', 1)
-      .single();
+    let query = sb.from('settings').select('hours, orders_paused');
+    query = companyId ? query.eq('company_id', companyId) : query.eq('id', 1);
+    const { data, error } = await query.single();
     if (error || !data) return { open: true, paused: false, opensLabel: null };
     return computeOpenState(data as SettingsLike, now);
   } catch {

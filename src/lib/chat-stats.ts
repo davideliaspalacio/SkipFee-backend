@@ -12,14 +12,21 @@ export interface ChatStats {
  *
  * Devuelve un Map<phone, stats>. Los teléfonos sin pedidos no aparecen en el
  * map (el caller asume defaults a 0).
+ *
+ * Multi-empresa: scopea los pedidos por `company_id` (un mismo teléfono puede
+ * ser cliente de varias empresas; cada una ve solo sus propios pedidos).
  */
-export async function chatStatsByPhone(phones: string[]): Promise<Map<string, ChatStats>> {
+export async function chatStatsByPhone(
+  phones: string[],
+  companyId: string,
+): Promise<Map<string, ChatStats>> {
   const result = new Map<string, ChatStats>();
   if (phones.length === 0) return result;
 
   const { data, error } = await supabaseAdmin()
     .from('orders')
     .select('phone, total')
+    .eq('company_id', companyId)
     .eq('status', 'entregado')
     .in('phone', phones);
 

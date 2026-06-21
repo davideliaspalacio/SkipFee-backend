@@ -18,8 +18,20 @@ import { isAllowedOrigin, isPublicPath, isStorefrontSelfCors } from '@/lib/check
  * - Las rutas `/api/checkout/*` setean su PROPIO CORS (origen = STOREFRONT_ORIGIN,
  *   sin credentials) y manejan su preflight OPTIONS. El middleware las deja pasar
  *   intactas (sin sesión, sin pisar headers) vía `isStorefrontSelfCors`.
- * - `GET /api/zones` y `/api/products/available` son públicas y reciben CORS del
- *   middleware (ver `@/lib/checkout/access`).
+ * - `/api/products/available?company=<slug>` es pública (catálogo de la tienda por
+ *   empresa) y recibe CORS del middleware (ver `@/lib/checkout/access`).
+ *
+ * Multi-empresa:
+ * - El árbol de negocio vive bajo `/api/<companyId>/*` (orders, chats, products,
+ *   zones, …). Esas rutas son PRIVADAS: el middleware solo exige sesión (igual que
+ *   hoy); la autorización fina (pertenencia a la empresa del path) la hace
+ *   `withTenant`/`getTenantContext` en cada handler. No hay matching especial aquí.
+ * - Las rutas de plataforma `/api/platform/*` (owner) también son privadas: pasan
+ *   el gate de sesión y `requirePlatformAdmin` valida que sea owner en el handler.
+ * - Rutas públicas reconocidas (sin sesión): webhooks
+ *   `/api/webhooks/{kapso,wompi}/<companyId>`, `/api/checkout/*`,
+ *   `/api/products/available`, `/api/leads`, `/api/health`, `/api/auth/*`,
+ *   `/api/cron/*` (ver `isPublicPath` en `@/lib/checkout/access`).
  */
 
 function corsHeaders(origin: string | null): Record<string, string> {

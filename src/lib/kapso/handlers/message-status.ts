@@ -29,6 +29,12 @@ const payloadSchema = z
 export async function handleMessageStatus(opts: {
   event: string;
   payload: unknown;
+  /**
+   * Empresa que recibe el webhook (multi-empresa). Cuando se pasa, la update de
+   * `messages` se scopea por `company_id` para no tocar mensajes de otra empresa
+   * que compartan kapso_message_id (ahora único por empresa).
+   */
+  companyId?: string;
 }): Promise<void> {
   const parsed = payloadSchema.safeParse(opts.payload);
   if (!parsed.success) {
@@ -59,9 +65,8 @@ export async function handleMessageStatus(opts: {
   }
 
   const sb = supabaseAdmin();
-  const { error } = await sb
-    .from('messages')
-    .update(update)
-    .eq('kapso_message_id', kapsoMessageId);
+  let query = sb.from('messages').update(update).eq('kapso_message_id', kapsoMessageId);
+  if (opts.companyId) query = query.eq('company_id', opts.companyId);
+  const { error } = await query;
   if (error) throw error;
 }

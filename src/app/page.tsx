@@ -11,7 +11,7 @@ export default function Home() {
           <code>GET /api/health</code> — healthcheck
         </li>
         <li>
-          <code>POST /api/webhooks/kapso</code> — receptor de eventos de Kapso (HMAC SHA256)
+          <code>POST /api/webhooks/kapso/:companyId</code> — receptor de eventos de Kapso por empresa (HMAC SHA256)
         </li>
       </ul>
       <p style={{ marginTop: 24, opacity: 0.7 }}>
