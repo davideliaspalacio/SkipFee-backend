@@ -57,6 +57,9 @@ const PUBLIC_METHOD_PATHS: Array<{ method: string; pathname: string }> = [
   // sitio de marketing debe estar en EXTRA_CORS_ORIGINS para que el middleware
   // le responda CORS.
   { method: 'POST', pathname: '/api/leads' },
+  // POST /api/demo-visit: avisa a Discord cuando alguien entra a la demo pública
+  // del panel (admin /preview). Sin sesión; el origen del panel va en EXTRA_CORS_ORIGINS.
+  { method: 'POST', pathname: '/api/demo-visit' },
 ];
 
 /** Orígenes locales del front en desarrollo (Vite). */

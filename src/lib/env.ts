@@ -54,6 +54,10 @@ const schema = z.object({
   // el lead igual se guarda en Supabase y simplemente no se manda a Discord.
   DISCORD_WEBHOOK_URL: z.string().url().optional(),
 
+  // --- Discord (aviso de visitas a la DEMO del panel) ---
+  // Webhook para POST /api/demo-visit. Opcional: si falta, cae a DISCORD_WEBHOOK_URL.
+  DISCORD_DEMO_WEBHOOK_URL: z.string().url().optional(),
+
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });
 
