@@ -14,29 +14,29 @@ describe('GET /api/chats/stats', () => {
     supabaseStub = makeSupabaseStub({
       chats: {
         rows: [
-          { status: 'bot' },
-          { status: 'bot' },
-          { status: 'human' },
-          { status: 'pending' },
-          { status: 'pending' },
-          { status: 'pending' },
+          { status: 'bot', unread: 0 },
+          { status: 'bot', unread: 1 },
+          { status: 'human', unread: 2 },
+          { status: 'pending', unread: 0 },
+          { status: 'pending', unread: 3 },
+          { status: 'pending', unread: 0 },
         ],
       },
     });
   });
 
-  it('cuenta total y pendientes', async () => {
+  it('cuenta total, pendientes y chats no leídos', async () => {
     const res = await GET();
     expect(res.status).toBe(200);
     const body = await res.json();
-    expect(body).toEqual({ ok: true, total: 6, pending: 3 });
+    expect(body).toEqual({ ok: true, total: 6, pending: 3, unread: 3 });
   });
 
   it('devuelve 0/0 si no hay chats', async () => {
     supabaseStub = makeSupabaseStub({ chats: { rows: [] } });
     const res = await GET();
     const body = await res.json();
-    expect(body).toEqual({ ok: true, total: 0, pending: 0 });
+    expect(body).toEqual({ ok: true, total: 0, pending: 0, unread: 0 });
   });
 
   it('propaga error del supabase', async () => {
