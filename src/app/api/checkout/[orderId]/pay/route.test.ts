@@ -74,7 +74,6 @@ describe('POST /api/checkout/:orderId/pay', () => {
       jsonRequest(URL, 'POST', {
         customer: { name: 'Ana Pérez', email: 'ana@mail.com' },
         paymentMethod: 'Wompi · Tarjeta',
-        note: 'Sin cebolla',
       }),
       asyncParams({ orderId: 'o1' }),
     );
@@ -91,11 +90,10 @@ describe('POST /api/checkout/:orderId/pay', () => {
     expect(up.name).toBe('Ana Pérez');
     expect(up.email).toBe('ana@mail.com');
 
-    // update de la orden: liga customer + payment_method + note, NO toca status
+    // update de la orden: liga customer + payment_method, NO toca status
     const upd = orderUpdateCapture.mock.calls[0][0];
     expect(upd.customer_id).toBe('cust-1');
     expect(upd.payment_method).toBe('Wompi · Tarjeta');
-    expect(upd.note).toBe('Sin cebolla');
     expect(upd.status).toBeUndefined();
   });
 

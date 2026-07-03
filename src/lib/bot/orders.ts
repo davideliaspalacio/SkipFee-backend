@@ -33,7 +33,6 @@ export interface CreateBotOrderInput {
   zoneId: string;
   items: BotOrderItem[];
   paymentMethod: string;
-  note?: string;
   lat?: number;
   lng?: number;
 }
@@ -131,7 +130,6 @@ export async function createBotOrder(input: CreateBotOrderInput): Promise<Create
       address: input.address,
       phone: input.phone,
       payment_method: input.paymentMethod,
-      note: input.note ?? null,
       lat: input.lat ?? zone.lat,
       lng: input.lng ?? zone.lng,
     })

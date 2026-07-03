@@ -89,7 +89,6 @@ const bodySchema = z.object({
     .min(1)
     .max(50),
   paymentMethod: z.string().min(1).max(60),
-  note: z.string().max(500).optional(),
   lat: z.number().optional(),
   lng: z.number().optional(),
 });
@@ -228,7 +227,6 @@ export const POST = withTenant(async (request, ctx) => {
       address: parsed.customer.addr,
       phone: parsed.customer.phone,
       payment_method: parsed.paymentMethod,
-      note: parsed.note ?? null,
       lat: parsed.lat ?? zone.lat,
       lng: parsed.lng ?? zone.lng,
     })
