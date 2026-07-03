@@ -36,7 +36,6 @@ const bodySchema = z.object({
     email: z.string().email().max(200).optional().or(z.literal('')),
   }),
   paymentMethod: z.string().min(1).max(60).optional(),
-  note: z.string().max(500).optional(),
 });
 
 export async function POST(request: NextRequest, ctx: { params: Promise<{ orderId: string }> }) {
@@ -131,12 +130,11 @@ export async function POST(request: NextRequest, ctx: { params: Promise<{ orderI
     return jsonWithCors({ ok: false, error: custErr?.message ?? 'customer error' }, 500);
   }
 
-  // Ligar customer + payment_method + note a la orden. NO cambiamos status.
+  // Ligar customer + payment_method a la orden. NO cambiamos status.
   const update: Record<string, unknown> = {
     customer_id: (customer as { id: string }).id,
     payment_method: parsed.paymentMethod ?? 'Wompi · Tarjeta',
   };
-  if (parsed.note !== undefined) update.note = parsed.note;
 
   const { error: updErr } = await sb
     .from('orders')
