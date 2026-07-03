@@ -52,7 +52,6 @@ describe('GET /api/checkout/:orderId', () => {
       zone_id: 'poblado',
       lat: 6.2,
       lng: -75.5,
-      note: null,
       customer: { name: 'Ana', email: null },
       items: [
         { qty: 2, price_at_order: 28000, product: { id: 'p01', name: 'Pastrami Bros' } },
@@ -104,7 +103,7 @@ describe('GET /api/checkout/:orderId', () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
       id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
-      address: null, zone_id: null, lat: null, lng: null, note: null,
+      address: null, zone_id: null, lat: null, lng: null,
       customer: null, items: [],
     };
     supabaseStub = makeSupabaseStub(baseTables(order));
@@ -120,7 +119,7 @@ describe('GET /api/checkout/:orderId', () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
       id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
-      address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
+      address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5,
       customer: { name: 'Ana', email: null }, items: [],
     };
     const giftProduct = { id: 'gift1', company_id: CO, name: 'Postre de regalo', price: 0, cat: 'Regalo', available: true, archived: false, img: '', description: null };
@@ -146,7 +145,7 @@ describe('GET /api/checkout/:orderId', () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
       id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
-      address: 'Cra 1', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
+      address: 'Cra 1', zone_id: 'poblado', lat: 6.2, lng: -75.5,
       customer: { name: 'Ana', email: null }, items: [],
     };
     supabaseStub = makeSupabaseStub(baseTables(order));
@@ -214,7 +213,7 @@ describe('GET /api/checkout/:orderId', () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
       id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
-      address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5, note: null,
+      address: 'Cra 1 #2-3', zone_id: 'poblado', lat: 6.2, lng: -75.5,
       wompi_status_message: 'Fondos insuficientes',
       customer: { name: 'Ana', email: null },
       items: [],
@@ -230,7 +229,7 @@ describe('GET /api/checkout/:orderId', () => {
     const future = new Date(Date.now() + 60 * 60_000).toISOString();
     const order = {
       id: 'o1', company_id: 'co-1', phone: '573136913188', status: 'borrador', expires_at: future,
-      address: null, zone_id: null, lat: null, lng: null, note: null,
+      address: null, zone_id: null, lat: null, lng: null,
       wompi_status_message: null,
       customer: null, items: [],
     };

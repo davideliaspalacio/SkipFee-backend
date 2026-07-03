@@ -1,5 +1,6 @@
 import type { NextRequest } from 'next/server';
 import { supabaseAdmin } from '@/lib/db';
+import { compareCategories } from '@/lib/categories';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -47,14 +48,17 @@ export async function GET(request: NextRequest) {
     return Response.json({ ok: false, error: 'Empresa suspendida' }, { status: 403 });
   }
 
-  const { data, error } = await admin
-    .from('products')
-    .select('id, name, price, cat')
-    .eq('company_id', company.id)
-    .eq('available', true)
-    .eq('archived', false)
-    .order('cat')
-    .order('name');
+  const [{ data, error }, { data: settings }] = await Promise.all([
+    admin
+      .from('products')
+      .select('id, name, price, cat')
+      .eq('company_id', company.id)
+      .eq('available', true)
+      .eq('archived', false)
+      .order('cat')
+      .order('name'),
+    admin.from('settings').select('categories').eq('company_id', company.id).maybeSingle(),
+  ]);
 
   if (error) {
     console.error('[products/available] db error', error);
@@ -69,10 +73,14 @@ export async function GET(request: NextRequest) {
     byCategory.set(p.cat, list);
   }
 
-  const categories = Array.from(byCategory.entries()).map(([name, items]) => ({
-    name,
-    items,
-  }));
+  // Secciones en el orden configurado en el panel (Configuración → Categorías).
+  const compare = compareCategories(((settings?.categories as string[] | null) ?? []));
+  const categories = Array.from(byCategory.entries())
+    .sort(([a], [b]) => compare(a, b))
+    .map(([name, items]) => ({
+      name,
+      items,
+    }));
 
   return Response.json({ ok: true, categories });
 }

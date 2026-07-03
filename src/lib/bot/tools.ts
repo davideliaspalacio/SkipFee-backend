@@ -1,6 +1,7 @@
 import { Type, type FunctionDeclaration } from '@google/genai';
 import { supabaseAdmin } from '@/lib/db';
 import { createBotOrder } from '@/lib/bot/orders';
+import { compareCategories } from '@/lib/categories';
 
 /**
  * Definiciones de tools que Gemini puede invocar.
@@ -77,7 +78,6 @@ export const toolDefinitions: FunctionDeclaration[] = [
           type: Type.STRING,
           description: 'Método de pago: "Wompi · Tarjeta" o "Wompi · PSE"',
         },
-        note: { type: Type.STRING, description: 'Nota especial (opcional)' },
       },
       required: ['customerName', 'phone', 'address', 'zoneId', 'items', 'paymentMethod'],
     },
@@ -113,7 +113,13 @@ export async function consultarCarta(companyId?: string): Promise<unknown> {
     .eq('available', true)
     .eq('archived', false);
   if (companyId) query = query.eq('company_id', companyId);
-  const { data, error } = await query.order('cat').order('name');
+  // Fila de settings: por empresa; fallback legacy a la fila única id=1.
+  let settingsQuery = sb.from('settings').select('categories');
+  settingsQuery = companyId ? settingsQuery.eq('company_id', companyId) : settingsQuery.eq('id', 1);
+  const [{ data, error }, { data: settings }] = await Promise.all([
+    query.order('cat').order('name'),
+    settingsQuery.maybeSingle(),
+  ]);
   if (error) return { ok: false, error: error.message };
 
   const byCategory = new Map<string, Array<{ id: string; name: string; price: number }>>();
@@ -122,9 +128,13 @@ export async function consultarCarta(companyId?: string): Promise<unknown> {
     list.push({ id: p.id, name: p.name, price: p.price });
     byCategory.set(p.cat, list);
   }
+  // Carta en el orden que el restaurante configuró (Configuración → Categorías).
+  const compare = compareCategories(((settings?.categories as string[] | null) ?? []));
   return {
     ok: true,
-    categories: Array.from(byCategory.entries()).map(([cat, items]) => ({ cat, items })),
+    categories: Array.from(byCategory.entries())
+      .sort(([a], [b]) => compare(a, b))
+      .map(([cat, items]) => ({ cat, items })),
   };
 }
 
@@ -203,7 +213,6 @@ export async function crearPedido(args: {
   zoneId: string;
   items: Array<{ productId: string; qty: number }>;
   paymentMethod: string;
-  note?: string;
   companyId?: string;
 }): Promise<unknown> {
   // El bot crea el pedido DIRECTO en BD (multi-empresa). La vieja ruta global
@@ -219,7 +228,6 @@ export async function crearPedido(args: {
     zoneId: args.zoneId,
     items: args.items,
     paymentMethod: args.paymentMethod,
-    note: args.note,
   });
 }
 

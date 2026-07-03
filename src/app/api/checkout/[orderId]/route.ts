@@ -41,7 +41,6 @@ type OrderRow = {
   zone_id: string | null;
   lat: number | null;
   lng: number | null;
-  note: string | null;
   wompi_status_message: string | null;
   order_number: number | null;
   tip: number | null;
@@ -62,7 +61,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   const { data: order } = (await sb
     .from('orders')
     .select(
-      `id, company_id, phone, status, expires_at, address, zone_id, lat, lng, note, wompi_status_message, order_number, tip, tip_percent,
+      `id, company_id, phone, status, expires_at, address, zone_id, lat, lng, wompi_status_message, order_number, tip, tip_percent,
        customer:customers(name, email),
        items:order_items(qty, price_at_order, product:products(id, name))`,
     )
@@ -97,7 +96,7 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available, img, description').eq('company_id', companyId).eq('available', true).eq('archived', false).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').eq('company_id', companyId).order('name'),
-    sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('company_id', companyId).single(),
+    sb.from('settings').select('peak_start, peak_end, base_delivery_fee, categories').eq('company_id', companyId).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
       .eq('company_id', companyId)
@@ -191,6 +190,8 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
         img: p.img && p.img.trim() ? p.img : null,
         description: p.description && p.description.trim() ? p.description : null,
       })),
+      // Secciones en el orden que el restaurante configuró (Configuración → Categorías).
+      ((settings as { categories?: string[] | null } | null)?.categories ?? []),
     ),
     zones: zoneList.map(z => ({ id: z.id, name: z.name ?? '', tarifa: z.tarifa, recargo: z.recargo })),
     // Estado de operación: la tienda muestra "cerrado" y bloquea el pago si está cerrado.

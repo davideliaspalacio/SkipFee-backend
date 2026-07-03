@@ -28,6 +28,18 @@ describe('buildCatalog', () => {
   it('catálogo vacío', () => {
     expect(buildCatalog([])).toEqual({ categories: [] });
   });
+
+  it('ordena las categorías según settings.categories; desconocidas al final', () => {
+    const catalog = buildCatalog(
+      [
+        { id: 'b03', name: 'Limonada', price: 4500, cat: 'Bebidas', img: null, description: null },
+        { id: 'x01', name: 'Brownie sorpresa', price: 8000, cat: 'Especiales', img: null, description: null },
+        { id: 'p01', name: 'Pastrami Bros', price: 28000, cat: 'Sándwiches', img: null, description: null },
+      ],
+      ['Sándwiches', 'Bebidas', 'Postres'],
+    );
+    expect(catalog.categories.map(c => c.cat)).toEqual(['Sándwiches', 'Bebidas', 'Especiales']);
+  });
 });
 
 describe('emptyCart', () => {

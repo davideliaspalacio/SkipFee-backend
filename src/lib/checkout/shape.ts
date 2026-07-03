@@ -3,6 +3,8 @@
  * Mantienen el contrato CONTRACT_CHECKOUT.md §2/§3 con el frontend.
  */
 
+import { compareCategories } from '@/lib/categories';
+
 export interface CatalogProduct {
   id: string;
   name: string;
@@ -29,12 +31,14 @@ export interface Catalog {
 }
 
 /**
- * Catálogo embebido del GET: agrupa por categoría preservando el orden de
- * aparición. Cada item es la forma reducida `{ id, name, price, cat, img,
- * description }` — incluye `img` y `description` para que el storefront
+ * Catálogo embebido del GET: agrupa por categoría y ordena las secciones según
+ * `categoryOrder` (settings.categories, el orden que el restaurante configuró
+ * en el panel); las categorías fuera de la lista van al final preservando su
+ * orden de aparición. Cada item es la forma reducida `{ id, name, price, cat,
+ * img, description }` — incluye `img` y `description` para que el storefront
  * muestre la foto y el texto del producto en lugar del placeholder.
  */
-export function buildCatalog(products: CatalogProduct[]): Catalog {
+export function buildCatalog(products: CatalogProduct[], categoryOrder: readonly string[] = []): Catalog {
   const byCat = new Map<string, Catalog['categories'][number]['items']>();
   for (const p of products) {
     const list = byCat.get(p.cat) ?? [];
@@ -48,8 +52,11 @@ export function buildCatalog(products: CatalogProduct[]): Catalog {
     });
     byCat.set(p.cat, list);
   }
+  const compare = compareCategories(categoryOrder);
   return {
-    categories: Array.from(byCat.entries()).map(([cat, items]) => ({ cat, items })),
+    categories: Array.from(byCat.entries())
+      .sort(([a], [b]) => compare(a, b))
+      .map(([cat, items]) => ({ cat, items })),
   };
 }
 
