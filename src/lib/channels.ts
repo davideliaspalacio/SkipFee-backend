@@ -12,6 +12,8 @@ export type ChannelStatus =
   | 'degraded'
   | 'paused';
 
+export type OrderStatus = 'nuevo' | 'pagado' | 'cocina' | 'empacado' | 'ruta' | 'entregado';
+
 interface ChannelSeed {
   provider: ChannelProvider;
   name: string;
@@ -186,6 +188,22 @@ const FAKE_CUSTOMERS = [
 const RappiStatuses = ['READY', 'SENT', 'TAKEN'] as const;
 const DidiStatuses = ['ORDER_CREATED', 'ORDER_ACCEPTED', 'IN_PREPARATION'] as const;
 
+interface MarketplaceStatusSyncInput {
+  sb: SupabaseClient;
+  companyId: string;
+  orderId: string;
+  provider: MarketplaceProvider;
+  externalOrderId: string | null;
+  fromStatus: OrderStatus;
+  toStatus: OrderStatus;
+}
+
+interface MarketplaceStatusMapping {
+  action: string;
+  externalStatus: string;
+  shouldCallProvider: boolean;
+}
+
 function dbRows<T>(data: unknown[] | null): T[] {
   return (data ?? []) as T[];
 }
@@ -252,6 +270,88 @@ function providerDeliveryMethod(provider: MarketplaceProvider): string {
 
 function randomPick<T>(items: T[]): T {
   return items[Math.floor(Math.random() * items.length)];
+}
+
+export function isMarketplaceProvider(provider: string | null | undefined): provider is MarketplaceProvider {
+  return provider === 'rappi' || provider === 'didi';
+}
+
+function mapSkipfeeStatusToMarketplace(
+  provider: MarketplaceProvider,
+  status: OrderStatus,
+): MarketplaceStatusMapping {
+  if (provider === 'rappi') {
+    if (status === 'pagado' || status === 'cocina') {
+      return { action: 'take_order', externalStatus: 'TAKEN', shouldCallProvider: true };
+    }
+    if (status === 'empacado') {
+      return { action: 'ready_for_pickup', externalStatus: 'READY_FOR_PICKUP', shouldCallProvider: true };
+    }
+    if (status === 'ruta') {
+      return { action: 'dispatch_started', externalStatus: 'TAKEN', shouldCallProvider: false };
+    }
+    if (status === 'entregado') {
+      return { action: 'completed_locally', externalStatus: 'DELIVERED', shouldCallProvider: false };
+    }
+    return { action: 'local_status', externalStatus: 'SENT', shouldCallProvider: false };
+  }
+
+  if (status === 'pagado') {
+    return { action: 'accept_order', externalStatus: 'ORDER_ACCEPTED', shouldCallProvider: true };
+  }
+  if (status === 'cocina') {
+    return { action: 'start_preparing', externalStatus: 'IN_PREPARATION', shouldCallProvider: true };
+  }
+  if (status === 'empacado') {
+    return { action: 'ready_for_pickup', externalStatus: 'READY_FOR_PICKUP', shouldCallProvider: true };
+  }
+  if (status === 'ruta') {
+    return { action: 'dispatch_started', externalStatus: 'ON_THE_WAY', shouldCallProvider: true };
+  }
+  if (status === 'entregado') {
+    return { action: 'complete_order', externalStatus: 'COMPLETED', shouldCallProvider: true };
+  }
+  return { action: 'local_status', externalStatus: 'ORDER_CREATED', shouldCallProvider: false };
+}
+
+async function recordMarketplaceStatusEvent(
+  sb: SupabaseClient,
+  input: MarketplaceStatusSyncInput,
+  channelId: string | null,
+  mapping: MarketplaceStatusMapping,
+  status: 'processed' | 'failed' | 'ignored',
+  payload: Record<string, unknown>,
+  error?: string,
+) {
+  const eventId = `${input.orderId}:${input.toStatus}:${mapping.action}:${Date.now()}`;
+  await sb.from('marketplace_events').insert({
+    company_id: input.companyId,
+    channel_id: channelId,
+    provider: input.provider,
+    external_event_id: eventId,
+    event_type: `order.status.${mapping.action}`,
+    external_order_id: input.externalOrderId,
+    payload,
+    status,
+    processed_order_id: input.orderId,
+    error: error ?? null,
+    processed_at: nowIso(),
+  });
+}
+
+async function callLiveMarketplaceStatusAdapter(
+  provider: MarketplaceProvider,
+  _mapping: MarketplaceStatusMapping,
+  _input: MarketplaceStatusSyncInput,
+  _settings: Record<string, unknown>,
+): Promise<{ ok: true; externalStatus?: string; response?: Record<string, unknown> } | { ok: false; error: string }> {
+  return {
+    ok: false,
+    error:
+      provider === 'rappi'
+        ? 'Adapter live de Rappi pendiente de credenciales client_id/client_secret/store_id'
+        : 'Adapter live de DiDi pendiente de documentación privada y credenciales',
+  };
 }
 
 function normalizeChannelSeed(companyId: string, seed: ChannelSeed) {
@@ -396,6 +496,216 @@ export async function setChannelAction(
 
   if (error) throw error;
   return data;
+}
+
+export async function syncMarketplaceOrderStatus(input: MarketplaceStatusSyncInput): Promise<
+  | {
+      ok: true;
+      mode: ChannelMode;
+      provider: MarketplaceProvider;
+      action: string;
+      externalStatus: string;
+      simulated: boolean;
+    }
+  | {
+      ok: false;
+      mode: ChannelMode | null;
+      provider: MarketplaceProvider;
+      action: string;
+      error: string;
+      skipped?: boolean;
+    }
+> {
+  const { sb, companyId, provider, orderId, externalOrderId } = input;
+  const mapping = mapSkipfeeStatusToMarketplace(provider, input.toStatus);
+
+  if (!externalOrderId) {
+    return {
+      ok: false,
+      mode: null,
+      provider,
+      action: mapping.action,
+      error: 'Pedido sin external_order_id; no se puede sincronizar con marketplace',
+      skipped: true,
+    };
+  }
+
+  await ensureDefaultChannels(sb, companyId);
+
+  const { data: channelData, error: channelError } = await sb
+    .from('sales_channels')
+    .select('id, provider, mode, status, settings')
+    .eq('company_id', companyId)
+    .eq('provider', provider)
+    .maybeSingle();
+
+  if (channelError || !channelData) {
+    return {
+      ok: false,
+      mode: null,
+      provider,
+      action: mapping.action,
+      error: channelError?.message ?? 'Canal marketplace no encontrado',
+      skipped: true,
+    };
+  }
+
+  const channel = channelData as {
+    id: string;
+    provider: MarketplaceProvider;
+    mode: ChannelMode;
+    status: ChannelStatus;
+    settings: Record<string, unknown> | null;
+  };
+
+  if (channel.status === 'paused' || channel.mode === 'none') {
+    await recordMarketplaceStatusEvent(
+      sb,
+      input,
+      channel.id,
+      mapping,
+      'ignored',
+      {
+        skipped: true,
+        reason: channel.status === 'paused' ? 'channel_paused' : 'channel_not_configured',
+        provider,
+        externalOrderId,
+        fromStatus: input.fromStatus,
+        toStatus: input.toStatus,
+        mapping,
+      },
+    );
+    return {
+      ok: false,
+      mode: channel.mode,
+      provider,
+      action: mapping.action,
+      error: channel.status === 'paused' ? 'Canal pausado' : 'Canal no configurado',
+      skipped: true,
+    };
+  }
+
+  if (channel.mode === 'simulated') {
+    await recordMarketplaceStatusEvent(
+      sb,
+      input,
+      channel.id,
+      mapping,
+      'processed',
+      {
+        simulated: true,
+        provider,
+        externalOrderId,
+        fromStatus: input.fromStatus,
+        toStatus: input.toStatus,
+        action: mapping.action,
+        externalStatus: mapping.externalStatus,
+        shouldCallProvider: mapping.shouldCallProvider,
+      },
+    );
+
+    await Promise.all([
+      sb
+        .from('orders')
+        .update({ channel_status: mapping.externalStatus })
+        .eq('company_id', companyId)
+        .eq('id', orderId),
+      sb
+        .from('sales_channels')
+        .update({ last_event_at: nowIso(), last_error: null })
+        .eq('company_id', companyId)
+        .eq('provider', provider),
+    ]);
+
+    return {
+      ok: true,
+      mode: channel.mode,
+      provider,
+      action: mapping.action,
+      externalStatus: mapping.externalStatus,
+      simulated: true,
+    };
+  }
+
+  const liveResult = await callLiveMarketplaceStatusAdapter(
+    provider,
+    mapping,
+    input,
+    channel.settings ?? {},
+  );
+
+  if (!liveResult.ok) {
+    await recordMarketplaceStatusEvent(
+      sb,
+      input,
+      channel.id,
+      mapping,
+      'failed',
+      {
+        simulated: false,
+        provider,
+        externalOrderId,
+        fromStatus: input.fromStatus,
+        toStatus: input.toStatus,
+        action: mapping.action,
+        externalStatus: mapping.externalStatus,
+      },
+      liveResult.error,
+    );
+    await sb
+      .from('sales_channels')
+      .update({ status: 'degraded', last_error: liveResult.error, last_event_at: nowIso() })
+      .eq('company_id', companyId)
+      .eq('provider', provider);
+
+    return {
+      ok: false,
+      mode: channel.mode,
+      provider,
+      action: mapping.action,
+      error: liveResult.error,
+    };
+  }
+
+  const externalStatus = liveResult.externalStatus ?? mapping.externalStatus;
+  await recordMarketplaceStatusEvent(
+    sb,
+    input,
+    channel.id,
+    mapping,
+    'processed',
+    {
+      simulated: false,
+      provider,
+      externalOrderId,
+      fromStatus: input.fromStatus,
+      toStatus: input.toStatus,
+      action: mapping.action,
+      externalStatus,
+      response: liveResult.response ?? {},
+    },
+  );
+  await Promise.all([
+    sb
+      .from('orders')
+      .update({ channel_status: externalStatus })
+      .eq('company_id', companyId)
+      .eq('id', orderId),
+    sb
+      .from('sales_channels')
+      .update({ status: 'live_connected', last_error: null, last_event_at: nowIso() })
+      .eq('company_id', companyId)
+      .eq('provider', provider),
+  ]);
+
+  return {
+    ok: true,
+    mode: channel.mode,
+    provider,
+    action: mapping.action,
+    externalStatus,
+    simulated: false,
+  };
 }
 
 export async function simulateMarketplaceOrder(
