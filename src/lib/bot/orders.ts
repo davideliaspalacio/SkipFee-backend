@@ -134,6 +134,7 @@ export async function createBotOrder(input: CreateBotOrderInput): Promise<Create
       note: input.note ?? null,
       lat: input.lat ?? zone.lat,
       lng: input.lng ?? zone.lng,
+      sales_channel: 'whatsapp',
     })
     .select('id, order_number')
     .single();

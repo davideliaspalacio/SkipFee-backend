@@ -19,6 +19,13 @@ interface OrderRow {
   note: string | null;
   lat: number;
   lng: number;
+  sales_channel?: string | null;
+  external_order_id?: string | null;
+  external_store_id?: string | null;
+  channel_status?: string | null;
+  channel_delivery_method?: string | null;
+  channel_commission?: number | null;
+  channel_discount?: number | null;
   created_at: string;
   customer: { id: string; name: string } | { id: string; name: string }[] | null;
   zone: { id: string; name: string } | { id: string; name: string }[] | null;
@@ -76,6 +83,15 @@ export function serializeOrder(row: OrderRow) {
     note: row.note,
     lat: row.lat,
     lng: row.lng,
+    channel: {
+      provider: row.sales_channel ?? 'whatsapp',
+      externalOrderId: row.external_order_id ?? null,
+      externalStoreId: row.external_store_id ?? null,
+      status: row.channel_status ?? null,
+      deliveryMethod: row.channel_delivery_method ?? null,
+      commission: row.channel_commission ?? 0,
+      discount: row.channel_discount ?? 0,
+    },
   };
 }
 
