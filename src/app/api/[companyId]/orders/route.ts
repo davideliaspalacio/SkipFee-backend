@@ -8,6 +8,7 @@ export const dynamic = 'force-dynamic';
 
 const ORDER_SELECT = `
   id, order_number, total, tip, tip_percent, status, address, phone, payment_method, note, lat, lng, created_at,
+  sales_channel, external_order_id, external_store_id, channel_status, channel_delivery_method, channel_commission, channel_discount,
   customer:customers(id, name),
   zone:zones(id, name),
   cook:cooks(id, name),
@@ -231,6 +232,7 @@ export const POST = withTenant(async (request, ctx) => {
       note: parsed.note ?? null,
       lat: parsed.lat ?? zone.lat,
       lng: parsed.lng ?? zone.lng,
+      sales_channel: 'manual',
     })
     .select('id, order_number')
     .single();

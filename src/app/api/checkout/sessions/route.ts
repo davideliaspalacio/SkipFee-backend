@@ -167,6 +167,7 @@ export async function POST(request: NextRequest) {
     phone: parsed.phone,
     status: 'borrador',
     expires_at: expiresAt,
+    sales_channel: 'whatsapp',
   };
   if (customerId) insertPayload.customer_id = customerId;
   if (parsed.delivery) {
