@@ -447,6 +447,23 @@ const DEFS: MessageDef[] = [
         'Si necesitás un humano, escribime *asesor*.',
     },
   }),
+  def({
+    key: 'link.vencido',
+    category: 'conversacion',
+    step: 'link_enviado',
+    kind: 'buttons',
+    label: 'Carrito vencido: ofrecer uno nuevo',
+    description:
+      'Se envía si el cliente escribe cuando su carrito ya expiró. NO crea nada por sí solo: ' +
+      'el carrito nuevo se arma únicamente si el cliente pulsa el botón.',
+    variables: [],
+    default: {
+      body:
+        'Tu carrito se venció ⏳ (los links duran un rato por seguridad).\n' +
+        '¿Te armo uno nuevo con tus mismos datos?',
+      buttons: [{ id: 'carrito_nuevo', title: '🛒 Nuevo pedido' }],
+    },
+  }),
 
   // ----- Globales / utilitarios -----
   def({

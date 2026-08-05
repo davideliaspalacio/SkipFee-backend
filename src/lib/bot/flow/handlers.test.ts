@@ -44,6 +44,7 @@ import {
   handleDireccionZona,
   handleDireccionConfirmar,
   handleDireccionFueraCobertura,
+  handleLinkEnviado,
   handleConfirmarRecurrente,
   handlePostventaEncuesta,
   handlePostventaResena,
@@ -431,6 +432,77 @@ describe('Path DIRECCIÓN (geocoding + 3 botones)', () => {
       { step: 'direccion_fuera_cobertura', delivery: { address: 'lejos' } },
     ));
     expect(next.step).toBe('direccion_texto');
+  });
+});
+
+describe('handleLinkEnviado — carrito vencido', () => {
+  const VENCIDO = { status: 'borrador', expires_at: new Date(Date.now() - 60_000).toISOString() };
+  const VIVO = { status: 'borrador', expires_at: new Date(Date.now() + 600_000).toISOString() };
+  const CON_DATOS = {
+    step: 'link_enviado' as FlowState['step'],
+    orderId: 'o-viejo',
+    customer: { name: 'David', email: 'david@gmail.com' },
+    delivery: { address: 'Cl 10 #40-15', zoneId: 'poblado' },
+  };
+
+  it('carrito VIVO ⇒ solo recuerda el link, no ofrece nada', async () => {
+    supabaseStub = makeSupabaseStub({ orders: { single: VIVO } });
+    const next = await handleLinkEnviado(ctxOf({ text: 'hola' }, CON_DATOS));
+    expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('link arriba'));
+    expect(sendButtonsMock).not.toHaveBeenCalled();
+    expect(next.orderId).toBe('o-viejo');
+  });
+
+  it('carrito VENCIDO ⇒ avisa y ofrece botón, pero NO crea nada todavía', async () => {
+    supabaseStub = makeSupabaseStub({ orders: { single: VENCIDO } });
+    const next = await handleLinkEnviado(ctxOf({ text: 'hola' }, CON_DATOS));
+
+    const opts = sendButtonsMock.mock.calls[0][0];
+    expect(opts.body).toContain('venció');
+    expect(opts.buttons.map((b: { id: string }) => b.id)).toEqual(['carrito_nuevo']);
+    // Lo importante: escribir NO genera pedidos.
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(next.orderId).toBe('o-viejo');
+    expect(next.step).toBe('link_enviado');
+  });
+
+  it('pulsa el botón ⇒ crea carrito nuevo con sus mismos datos y cierra el viejo', async () => {
+    const updates: Array<{ payload: unknown; filters: Record<string, unknown> }> = [];
+    supabaseStub = makeSupabaseStub({
+      orders: { single: VENCIDO, onUpdate: (payload, filters) => { updates.push({ payload, filters }); } },
+    });
+    fetchMock.mockResolvedValue({
+      json: async () => ({ ok: true, orderId: 'o-nuevo', url: 'http://localhost:5173/pedir?orderId=o-nuevo' }),
+    });
+
+    const next = await handleLinkEnviado(ctxOf({ buttonReplyId: 'carrito_nuevo' }, CON_DATOS));
+
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.customer).toEqual({ name: 'David', email: 'david@gmail.com' });
+    expect(body.delivery).toMatchObject({ address: 'Cl 10 #40-15', zoneId: 'poblado' });
+    expect(sendCtaUrlMock).toHaveBeenCalledTimes(1);
+    expect(next.orderId).toBe('o-nuevo');
+    expect(next.step).toBe('link_enviado');
+    // El borrador viejo queda marcado como expirado (no quedan fantasmas en el tablero).
+    expect(updates[0].payload).toEqual({ status: 'expirado' });
+    expect(updates[0].filters).toMatchObject({ id: 'o-viejo', status: 'borrador' });
+  });
+
+  it('doble tap del botón con un carrito ya vivo ⇒ no crea otro borrador', async () => {
+    supabaseStub = makeSupabaseStub({ orders: { single: VIVO } });
+    const next = await handleLinkEnviado(ctxOf({ buttonReplyId: 'carrito_nuevo' }, CON_DATOS));
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sendTextMock).toHaveBeenCalledWith('573136913188', expect.stringContaining('link arriba'));
+    expect(next.orderId).toBe('o-viejo');
+  });
+
+  it('sin datos en el estado ⇒ cae al flujo normal en vez de armar un link a ciegas', async () => {
+    supabaseStub = makeSupabaseStub({ orders: { single: VENCIDO }, customers: { single: null } });
+    const next = await handleLinkEnviado(
+      ctxOf({ buttonReplyId: 'carrito_nuevo' }, { step: 'link_enviado', orderId: 'o-viejo' }),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(next.step).toBe('registro_nombre');
   });
 });
 

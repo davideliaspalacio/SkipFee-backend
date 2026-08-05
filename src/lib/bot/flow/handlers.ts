@@ -10,6 +10,7 @@ import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render, type RenderVars } from '@/lib/bot/messages/render';
 import { loadOpenState } from '@/lib/hours';
+import { classifyOrder, type CheckoutStatus } from '@/lib/checkout/shape';
 import type { ButtonDef } from '@/lib/bot/messages/defaults';
 import type { FlowState, FlowCustomer, FlowDelivery } from './state';
 import { emptyFlowState } from './state';
@@ -689,9 +690,82 @@ export async function handleDireccionFueraCobertura(ctx: HandlerContext): Promis
 // LINK ENVIADO — ya mandamos el link; esperando pago/seguimiento
 // =========================================================================
 
+/** Lee el estado del carrito del paso actual (`valida` | `ya_usada` | `expirada` | `no_encontrada`). */
+async function estadoDelCarrito(orderId: string | undefined): Promise<CheckoutStatus> {
+  if (!orderId) return 'no_encontrada';
+  const { data } = await supabaseAdmin()
+    .from('orders')
+    .select('status, expires_at')
+    .eq('id', orderId)
+    .maybeSingle();
+  // Mira `expires_at`, no solo el status: un borrador puede estar vencido y
+  // seguir marcado como `borrador` si el cron de expiración no corrió.
+  return classifyOrder(data as { status: string; expires_at: string | null } | null);
+}
+
+/**
+ * El cliente escribe después de recibir el link.
+ *
+ * Si el carrito venció NO le repetimos "te dejé el link arriba" (lo mandaría a
+ * una tienda que le dice "carrito vencido"): le avisamos y le ofrecemos uno
+ * nuevo con un botón. El carrito nuevo se crea SOLO si pulsa el botón —
+ * escribir no genera pedidos.
+ */
 export async function handleLinkEnviado(ctx: HandlerContext): Promise<FlowState> {
-  await sendCatalogText(ctx, ctx.phone, 'link.post_envio');
+  const estado = await estadoDelCarrito(ctx.state.orderId);
+
+  // Pulsó "Armar pedido nuevo".
+  if (ctx.incoming.buttonReplyId === 'carrito_nuevo') {
+    // Doble tap (o tap sobre un mensaje viejo) con un carrito ya vivo: le
+    // recordamos el que tiene en vez de crear otro borrador.
+    if (estado === 'valida') {
+      await sendCatalogText(ctx, ctx.phone, 'link.post_envio');
+      return ctx.state;
+    }
+    return crearCarritoNuevo(ctx);
+  }
+
+  if (estado === 'valida') {
+    await sendCatalogText(ctx, ctx.phone, 'link.post_envio');
+    return ctx.state;
+  }
+
+  // Ya pagó: que el saludo le muestre el estado de su pedido.
+  if (estado === 'ya_usada') return handleEntrada(ctx);
+
+  // Vencido o inexistente: avisamos y ofrecemos. Sin crear nada todavía.
+  await sendCatalogButtons(ctx, { to: ctx.phone, key: 'link.vencido' });
   return ctx.state;
+}
+
+/** Arma un carrito nuevo reusando los datos que ya tenemos del cliente. */
+async function crearCarritoNuevo(ctx: HandlerContext): Promise<FlowState> {
+  // Mismo gate que `iniciarPedido`: no se abren pedidos con el local cerrado.
+  const openState = await loadOpenState(supabaseAdmin());
+  if (!openState.open) {
+    if (openState.paused) {
+      await sendCatalogText(ctx, ctx.phone, 'cerrado.pausa');
+    } else {
+      await sendCatalogText(ctx, ctx.phone, 'cerrado.aviso', { apertura: openState.opensLabel ?? 'pronto' });
+    }
+    return { ...ctx.state, step: 'menu' };
+  }
+
+  // Si el estado perdió los datos (reset del flow, chat nuevo), volvemos al
+  // flujo normal, que los reconstruye desde `customers` o los vuelve a pedir.
+  const d = ctx.state.delivery;
+  if (!ctx.state.customer?.name || !d?.address || !d?.zoneId) return iniciarPedido(ctx);
+
+  // Cerramos el borrador viejo para no dejar fantasmas en el tablero.
+  if (ctx.state.orderId) {
+    await supabaseAdmin()
+      .from('orders')
+      .update({ status: 'expirado' })
+      .eq('id', ctx.state.orderId)
+      .eq('status', 'borrador');
+  }
+
+  return enviarLinkPedido(ctx);
 }
 
 // =========================================================================
