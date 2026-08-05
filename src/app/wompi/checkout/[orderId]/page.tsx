@@ -11,7 +11,8 @@ const COP = (n: number) => '$' + new Intl.NumberFormat('es-CO').format(Math.roun
  *   https://nuestra-app.com/wompi/checkout/<orderId>
  *
  * El cliente abre el link y ve esta página con sus items + total + 2 botones.
- * El "Aprobar" hace POST a /api/wompi/webhook simulando confirmación de Wompi.
+ * El "Aprobar" hace POST a /api/webhooks/wompi/<slug> simulando la confirmación
+ * de Wompi (form-urlencoded, sin firma: ese camino solo aplica en modo mock).
  *
  * Cuando llegue Wompi real, esta página se reemplaza por una redirección
  * a checkout.wompi.co y el flujo de pago real.
