@@ -10,6 +10,7 @@ import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render, type RenderVars } from '@/lib/bot/messages/render';
 import { loadOpenState } from '@/lib/hours';
+import { classifyOrder, type CheckoutStatus } from '@/lib/checkout/shape';
 import type { ButtonDef } from '@/lib/bot/messages/defaults';
 import type { FlowState, FlowCustomer, FlowDelivery } from './state';
 import { emptyFlowState } from './state';
@@ -689,9 +690,82 @@ export async function handleDireccionFueraCobertura(ctx: HandlerContext): Promis
 // LINK ENVIADO — ya mandamos el link; esperando pago/seguimiento
 // =========================================================================
 
+/** Lee el estado del carrito del paso actual (`valida` | `ya_usada` | `expirada` | `no_encontrada`). */
+async function estadoDelCarrito(orderId: string | undefined): Promise<CheckoutStatus> {
+  if (!orderId) return 'no_encontrada';
+  const { data } = await supabaseAdmin()
+    .from('orders')
+    .select('status, expires_at')
+    .eq('id', orderId)
+    .maybeSingle();
+  // Mira `expires_at`, no solo el status: un borrador puede estar vencido y
+  // seguir marcado como `borrador` si el cron de expiración no corrió.
+  return classifyOrder(data as { status: string; expires_at: string | null } | null);
+}
+
+/**
+ * El cliente escribe después de recibir el link.
+ *
+ * Si el carrito venció NO le repetimos "te dejé el link arriba" (lo mandaría a
+ * una tienda que le dice "carrito vencido"): le avisamos y le ofrecemos uno
+ * nuevo con un botón. El carrito nuevo se crea SOLO si pulsa el botón —
+ * escribir no genera pedidos.
+ */
 export async function handleLinkEnviado(ctx: HandlerContext): Promise<FlowState> {
-  await sendCatalogText(ctx, ctx.phone, 'link.post_envio');
+  const estado = await estadoDelCarrito(ctx.state.orderId);
+
+  // Pulsó "Armar pedido nuevo".
+  if (ctx.incoming.buttonReplyId === 'carrito_nuevo') {
+    // Doble tap (o tap sobre un mensaje viejo) con un carrito ya vivo: le
+    // recordamos el que tiene en vez de crear otro borrador.
+    if (estado === 'valida') {
+      await sendCatalogText(ctx, ctx.phone, 'link.post_envio');
+      return ctx.state;
+    }
+    return crearCarritoNuevo(ctx);
+  }
+
+  if (estado === 'valida') {
+    await sendCatalogText(ctx, ctx.phone, 'link.post_envio');
+    return ctx.state;
+  }
+
+  // Ya pagó: que el saludo le muestre el estado de su pedido.
+  if (estado === 'ya_usada') return handleEntrada(ctx);
+
+  // Vencido o inexistente: avisamos y ofrecemos. Sin crear nada todavía.
+  await sendCatalogButtons(ctx, { to: ctx.phone, key: 'link.vencido' });
   return ctx.state;
+}
+
+/** Arma un carrito nuevo reusando los datos que ya tenemos del cliente. */
+async function crearCarritoNuevo(ctx: HandlerContext): Promise<FlowState> {
+  // Mismo gate que `iniciarPedido`: no se abren pedidos con el local cerrado.
+  const openState = await loadOpenState(supabaseAdmin());
+  if (!openState.open) {
+    if (openState.paused) {
+      await sendCatalogText(ctx, ctx.phone, 'cerrado.pausa');
+    } else {
+      await sendCatalogText(ctx, ctx.phone, 'cerrado.aviso', { apertura: openState.opensLabel ?? 'pronto' });
+    }
+    return { ...ctx.state, step: 'menu' };
+  }
+
+  // Si el estado perdió los datos (reset del flow, chat nuevo), volvemos al
+  // flujo normal, que los reconstruye desde `customers` o los vuelve a pedir.
+  const d = ctx.state.delivery;
+  if (!ctx.state.customer?.name || !d?.address || !d?.zoneId) return iniciarPedido(ctx);
+
+  // Cerramos el borrador viejo para no dejar fantasmas en el tablero.
+  if (ctx.state.orderId) {
+    await supabaseAdmin()
+      .from('orders')
+      .update({ status: 'expirado' })
+      .eq('id', ctx.state.orderId)
+      .eq('status', 'borrador');
+  }
+
+  return enviarLinkPedido(ctx);
 }
 
 // =========================================================================
@@ -707,8 +781,12 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
 
   // companyId va en el payload para que la ruta de checkout (otro agente, aún
   // por migrar a por-empresa) cree la sesión/pedido en la empresa correcta.
-  const sessionPayload: Record<string, unknown> = { phone: ctx.phone };
-  if (ctx.companyId) sessionPayload.companyId = ctx.companyId;
+  // `companyId` va SIEMPRE: la ruta de checkout ya no tiene fallback a una
+  // empresa por defecto y responde 400 si falta.
+  const sessionPayload: Record<string, unknown> = {
+    phone: ctx.phone,
+    companyId: ctx.companyId,
+  };
   if (customer?.name) {
     sessionPayload.customer = {
       name: customer.name,
@@ -779,7 +857,8 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
 interface PostventaSettings {
   reviewGiftEnabled: boolean;
   reviewGiftName: string;
-  reviewLink: string;
+  /** Link de reseñas del negocio. `null` = no configurado todavía. */
+  reviewLink: string | null;
   reviewGiftExpiryDays: number;
 }
 
@@ -795,8 +874,10 @@ async function loadPostventaSettings(companyId?: string): Promise<PostventaSetti
   ).maybeSingle();
   return {
     reviewGiftEnabled: (data?.review_gift_enabled as boolean) ?? true,
-    reviewGiftName: (data?.review_gift_name as string) ?? 'Postre',
-    reviewLink: (data?.review_link as string) ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
+    reviewGiftName: (data?.review_gift_name as string) ?? 'un detalle',
+    // Sin fallback a propósito: antes caía al Google Maps de Bros and Subs, o
+    // sea que un negocio sin configurar pedía reseñas PARA OTRO NEGOCIO.
+    reviewLink: (data?.review_link as string | null) ?? null,
     reviewGiftExpiryDays: (data?.review_gift_expiry_days as number) ?? 30,
   };
 }
@@ -875,20 +956,37 @@ export async function handlePostventaEncuesta(ctx: HandlerContext): Promise<Flow
     return { ...ctx.state, step: 'finalizado' };
   }
 
-  // Rama alta (4–5): invitar a reseñar con link + promesa del postre.
+  // Rama alta (4–5): invitar a reseñar con link + promesa del regalo.
   const settings = await loadPostventaSettings(ctx.companyId);
+
+  // Sin link de reseñas configurado no hay a dónde mandar al cliente, y el
+  // regalo se valida contra esa reseña: se agradece y se cierra. Antes esto
+  // caía a un fallback con el Google Maps del negocio piloto.
+  if (!settings.reviewLink) {
+    await sendCatalogText(ctx, ctx.phone, 'postventa.gracias_baja', {
+      nombre: ctx.state.customer?.name?.split(' ')[0] ?? '',
+    });
+    console.log('[postventa] sin review_link configurado, se omite la invitación', {
+      companyId: ctx.companyId,
+    });
+    return { ...ctx.state, step: 'finalizado' };
+  }
+
+  // A una const: TypeScript no puede estrechar el tipo de una propiedad dentro
+  // del closure de `send`, aunque el guard de arriba ya descartó el null.
+  const reviewLink = settings.reviewLink;
   const linkMsg = await getMessage('postventa.invitar_resena', ctx.companyId);
   const resenaBody = render(linkMsg.body, { postre: settings.reviewGiftName });
   const resenaDisplay = linkMsg.displayText ?? 'Dejar reseña ⭐';
   await botSendInteractive(ctx, {
     to: ctx.phone,
-    body: `${resenaBody}\n\n🔗 ${resenaDisplay}: ${settings.reviewLink}`,
+    body: `${resenaBody}\n\n🔗 ${resenaDisplay}: ${reviewLink}`,
     send: () =>
       botSendCtaUrlMsg(ctx.companyId, {
         to: ctx.phone,
         body: resenaBody,
         displayText: resenaDisplay,
-        url: settings.reviewLink,
+        url: reviewLink,
       }),
   });
   return { ...ctx.state, step: 'postventa_resena' };

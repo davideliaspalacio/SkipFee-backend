@@ -89,7 +89,7 @@ describe('catalog — robustez', () => {
 
 describe('catalog — regresión de textos críticos', () => {
   it('mantiene los strings por defecto exactos', async () => {
-    expect((await getMessage('saludo.nuevo')).body).toBe('¡Quihubo {{nombre}}! 🥪 Soy el bot de Bros and Subs.\n¿Hacemos un pedido?');
+    expect((await getMessage('saludo.nuevo')).body).toBe('¡Quihubo {{nombre}}! Soy el bot de pedidos.\n¿Hacemos un pedido?');
     expect((await getMessage('registro.gracias')).body).toBe('¡Gracias!');
     expect((await getMessage('ia.fallback')).safeDefault).toContain('No entendí');
     expect((await getMessage('keywords.pedir')).words).toContain('quiero hacer un pedido');
@@ -97,8 +97,8 @@ describe('catalog — regresión de textos críticos', () => {
 
   it('saludo a cliente nuevo: con y sin nombre', async () => {
     const m = await getMessage('saludo.nuevo');
-    expect(render(m.body, { nombre: 'Juan' })).toBe('¡Quihubo Juan! 🥪 Soy el bot de Bros and Subs.\n¿Hacemos un pedido?');
-    expect(render(m.body, { nombre: 'parce' })).toBe('¡Quihubo parce! 🥪 Soy el bot de Bros and Subs.\n¿Hacemos un pedido?');
+    expect(render(m.body, { nombre: 'Juan' })).toBe('¡Quihubo Juan! Soy el bot de pedidos.\n¿Hacemos un pedido?');
+    expect(render(m.body, { nombre: 'parce' })).toBe('¡Quihubo parce! Soy el bot de pedidos.\n¿Hacemos un pedido?');
   });
 
   it('notificaciones: saludo "Hola {nombre}" o "Hola"', async () => {
@@ -107,7 +107,7 @@ describe('catalog — regresión de textos críticos', () => {
     expect(render((await getMessage('notif.ruta')).body, { saludo: 'Hola', nombre: '' }))
       .toBe('Hola, tu pedido va en camino 🛵');
     expect(render((await getMessage('notif.entregado')).body, { saludo: 'Hola Ana', nombre: 'Ana' }))
-      .toBe('Hola Ana, ¡tu pedido fue entregado! 🙌 Gracias por pedir en Bros and Subs.');
+      .toBe('Hola Ana, ¡tu pedido fue entregado! 🙌 Gracias por tu compra.');
   });
 
   it('confirmar dirección renderiza con variables (3 botones: guardar/cambiar/no guardar)', async () => {

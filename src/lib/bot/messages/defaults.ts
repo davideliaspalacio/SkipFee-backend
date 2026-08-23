@@ -78,7 +78,11 @@ export const GLOBAL_KEYWORDS = {
 // Tono / persona de la IA (gemini-fallback)
 // =========================================================================
 
-const IA_SYSTEM_PROMPT = `Sos el asistente del bot de Bros and Subs (sandwichería en Medellín).
+// Nota: deliberadamente SIN nombre de negocio ni rubro. Este prompt lo comparten
+// todas las empresas; el que sí lleva identidad es `lib/bot/prompt.ts`, que la
+// recibe por parámetro. Antes decía "Bros and Subs (sandwichería en Medellín)"
+// para todos.
+const IA_SYSTEM_PROMPT = `Sos el asistente del bot de pedidos de un negocio local.
 Tu trabajo es interpretar un mensaje del cliente cuando se sale del flujo guiado
 de botones y darle una respuesta corta en español paisa (vos forma, 1-2 oraciones,
 sin emojis excesivos) para reorientarlo al paso actual del pedido.
@@ -118,7 +122,7 @@ const DEFS: MessageDef[] = [
     label: 'Saludo a cliente nuevo',
     description: 'Mensaje completo del saludo cuando el número no está registrado. Se envía como cuerpo del menú inicial (junto al botón "Hacer pedido"). {{nombre}} cae a "parce" si no hay nombre.',
     variables: ['nombre'],
-    default: { body: '¡Quihubo {{nombre}}! 🥪 Soy el bot de Bros and Subs.\n¿Hacemos un pedido?' },
+    default: { body: '¡Quihubo {{nombre}}! Soy el bot de pedidos.\n¿Hacemos un pedido?' },
   }),
   def({
     key: 'saludo.recurrente',
@@ -447,6 +451,23 @@ const DEFS: MessageDef[] = [
         'Si necesitás un humano, escribime *asesor*.',
     },
   }),
+  def({
+    key: 'link.vencido',
+    category: 'conversacion',
+    step: 'link_enviado',
+    kind: 'buttons',
+    label: 'Carrito vencido: ofrecer uno nuevo',
+    description:
+      'Se envía si el cliente escribe cuando su carrito ya expiró. NO crea nada por sí solo: ' +
+      'el carrito nuevo se arma únicamente si el cliente pulsa el botón.',
+    variables: [],
+    default: {
+      body:
+        'Tu carrito se venció ⏳ (los links duran un rato por seguridad).\n' +
+        '¿Te armo uno nuevo con tus mismos datos?',
+      buttons: [{ id: 'carrito_nuevo', title: '🛒 Nuevo pedido' }],
+    },
+  }),
 
   // ----- Globales / utilitarios -----
   def({
@@ -636,7 +657,7 @@ const DEFS: MessageDef[] = [
     kind: 'text',
     label: 'Notificación: entregado',
     variables: ['saludo', 'nombre'],
-    default: { body: '{{saludo}}, ¡tu pedido fue entregado! 🙌 Gracias por pedir en Bros and Subs.' },
+    default: { body: '{{saludo}}, ¡tu pedido fue entregado! 🙌 Gracias por tu compra.' },
   }),
 
   // ----- Post-venta: encuesta + reseña + regalo (Tarea 3) -----
