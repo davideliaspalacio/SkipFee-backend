@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 
-export type ChannelProvider = 'whatsapp' | 'storefront' | 'rappi' | 'didi' | 'ubereats' | 'manual';
+export type ChannelProvider = 'whatsapp' | 'storefront' | 'rappi' | 'didi' | 'ubereats' | 'manual' | 'presencial';
 export type MarketplaceProvider = 'rappi' | 'didi';
 export type ChannelKind = 'direct' | 'marketplace' | 'pos';
 export type ChannelMode = 'none' | 'simulated' | 'live';
@@ -136,6 +136,20 @@ const DEFAULT_CHANNELS: ChannelSeed[] = [
     credentialsStatus: 'missing',
     settings: {},
   },
+  {
+    provider: 'presencial',
+    name: 'Presencial / Mesa',
+    kind: 'pos',
+    mode: 'live',
+    status: 'live_connected',
+    deliveryMode: 'dine_in',
+    commissionRateBps: 0,
+    credentialsStatus: 'configured',
+    settings: {
+      split: { minShare: 15000, maxParts: 10, feeOwner: 'restaurante', fixedSurcharge: 0 },
+      dineIn: { selfOrderQR: true },
+    },
+  },
 ];
 
 const REQUIREMENTS = [
@@ -248,6 +262,7 @@ function deliveryLabel(mode: string): string {
   if (mode === 'own_delivery') return 'Entrega propia';
   if (mode === 'provider_or_own') return 'Marketplace / propia';
   if (mode === 'pickup_or_table') return 'Recogida / mesa';
+  if (mode === 'dine_in') return 'En mesa';
   return mode;
 }
 

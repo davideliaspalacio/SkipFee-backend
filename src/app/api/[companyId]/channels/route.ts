@@ -6,7 +6,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const actionSchema = z.object({
-  provider: z.enum(['whatsapp', 'storefront', 'rappi', 'didi', 'ubereats', 'manual']),
+  provider: z.enum(['whatsapp', 'storefront', 'rappi', 'didi', 'ubereats', 'manual', 'presencial']),
   action: z.enum(['enable_simulator', 'prepare_live', 'pause', 'resume']),
 });
 
