@@ -6,7 +6,7 @@
 -- display/logs, pero deja de ser el identificador público de la ruta.
 --
 -- Patrón seguro (sin downtime, columna primero nullable):
---   1) ADD COLUMN code nullable
+--   1) ADD COLUMN IF NOT EXISTS code nullable
 --   2) CREATE SEQUENCE START 1001 (propia de esta columna)
 --   3) Backfill: asignar code a las empresas con code IS NULL, ordenando por
 --      created_at para que la asignación sea determinista.
@@ -16,7 +16,7 @@
 -- =========================================================================
 
 -- 1) Columna nullable (todavía sin default ni constraint).
-ALTER TABLE companies ADD COLUMN code bigint;
+ALTER TABLE companies ADD COLUMN IF NOT EXISTS code bigint;
 
 -- 2) Secuencia propia del code, arrancando en 1001.
 CREATE SEQUENCE IF NOT EXISTS companies_code_seq AS bigint START WITH 1001 INCREMENT BY 1;
@@ -43,4 +43,8 @@ ALTER SEQUENCE companies_code_seq OWNED BY companies.code;
 ALTER TABLE companies ALTER COLUMN code SET NOT NULL;
 
 -- 6) Unicidad del code (identificador público de la ruta).
-ALTER TABLE companies ADD CONSTRAINT companies_code_key UNIQUE (code);
+DO $c$ BEGIN
+  ALTER TABLE companies ADD CONSTRAINT companies_code_key UNIQUE (code);
+EXCEPTION WHEN duplicate_object THEN NULL;
+          WHEN duplicate_table  THEN NULL;
+END $c$;
