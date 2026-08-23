@@ -2,6 +2,7 @@ import type { NextRequest } from 'next/server';
 import type { SupabaseClient, User } from '@supabase/supabase-js';
 import { getSessionUser, SESSION_COOKIE_NAME } from './auth';
 import { supabaseAdmin, supabaseForUser } from './db';
+import { pruebaVencida } from './trial';
 
 /**
  * Resolución de tenant (empresa) para las rutas multi-empresa.
@@ -22,7 +23,7 @@ import { supabaseAdmin, supabaseForUser } from './db';
  * código (capa 1) y la RLS de pertenencia respalda a nivel BD (capa 2).
  */
 
-export type CompanyRole = 'super_admin' | 'admin' | 'cocina' | 'empaque';
+export type CompanyRole = 'super_admin' | 'admin' | 'cocina' | 'empaque' | 'mesero';
 
 export interface TenantContext {
   user: User;
@@ -75,11 +76,12 @@ export async function getTenantContext(
   // 1) Resolver la empresa por code (numérico).
   const { data: company } = await admin
     .from('companies')
-    .select('id, slug, code, status')
+    .select('id, slug, code, status, plan, trial_ends_at')
     .eq('code', codeNum)
     .maybeSingle();
 
   if (!company) return { error: 'Empresa no encontrada', status: 404 };
+  // `suspended` es la palanca manual del owner: apaga todo, panel y venta.
   if (company.status === 'suspended') return { error: 'Empresa suspendida', status: 403 };
 
   // 2) ¿Owner plataforma? (puede operar sobre cualquier empresa)
@@ -103,6 +105,19 @@ export async function getTenantContext(
       .maybeSingle();
     if (!member) return { error: 'Sin acceso a esta empresa', status: 403 };
     role = member.role as CompanyRole;
+  }
+
+  // 4) Prueba vencida → se cierra el PANEL, no la venta.
+  //
+  // Este corte vive aquí y no en el middleware porque `getTenantContext` es el
+  // cuello por donde pasan todas las rutas del panel (`/api/<code>/…`) y
+  // ninguna pública: el webhook de WhatsApp, el checkout de la tienda y el de
+  // Wompi no lo tocan. Así el bot sigue atendiendo y el comensal sigue
+  // pudiendo pagar mientras el dueño no puede entrar a operar.
+  //
+  // El owner de plataforma pasa siempre: necesita poder arreglar la empresa.
+  if (role !== 'platform' && pruebaVencida(company)) {
+    return { error: 'Prueba vencida', status: 402 };
   }
 
   return {
