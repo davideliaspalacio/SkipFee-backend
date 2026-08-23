@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { sendText } from '@/lib/kapso/client';
-import { recordMessage } from '@/lib/messaging';
+import { botSendTextMsg } from '@/lib/bot/sender';
+import { chatIdFor, recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
 import { withTenant } from '@/lib/tenant';
@@ -15,10 +15,9 @@ export const dynamic = 'force-dynamic';
  * avisa al cliente (notify=false para rechazar en silencio). Solo aplica sobre
  * rewards 'pendiente' de LA empresa.
  *
- * TODO(multi-empresa, transversal): el envío de WhatsApp (`sendText`,
- * `recordMessage`, catálogo `getMessage`) aún no recibe `companyId`; usa la
- * integración/credenciales/cache globales. Lo migra otro agente (helpers
- * compartidos). Lo persistible YA está scopeado por `company_id`.
+ * Multi-empresa: el envío sale por el proveedor de WhatsApp de LA empresa
+ * (`botSendTextMsg` → Kapso o Evolution) y tanto el catálogo de mensajes como
+ * la persistencia van scopeados por `company_id`.
  */
 const bodySchema = z.object({
   notes: z.string().max(500).optional(),
@@ -62,18 +61,19 @@ export const POST = withTenant<{ companyId: string; id: string }>(async (request
     .from('chats')
     .update({ status: 'bot' })
     .eq('company_id', companyId)
-    .eq('id', `wa:${r.phone}`);
+    .eq('id', chatIdFor(companyId, r.phone));
 
   if (body.notify !== false) {
     try {
-      const m = await getMessage('reward.rechazado');
+      const m = await getMessage('reward.rechazado', ctx.company.id);
       const bodyMsg = render(m.body, {});
-      const result = await sendText(r.phone, bodyMsg);
+      const result = await botSendTextMsg(ctx.company.id, r.phone, bodyMsg);
       await recordMessage({
         phone: r.phone,
         direction: 'bot',
         body: bodyMsg,
         kapsoMessageId: result.messages?.[0]?.id ?? null,
+        companyId,
       });
     } catch (err) {
       console.error('[rewards reject] notif error', err);

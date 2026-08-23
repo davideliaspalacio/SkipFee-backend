@@ -1,7 +1,8 @@
 import { z } from 'zod';
 import { withTenant } from '@/lib/tenant';
-import { kapsoFor, MissingIntegrationError } from '@/lib/integrations';
+import { MissingIntegrationError } from '@/lib/integrations';
 import { recordMessage } from '@/lib/messaging';
+import { botSendTextMsg } from '@/lib/bot/sender';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,7 +19,7 @@ const bodySchema = z.object({
  * Envío manual de un WhatsApp desde el panel (ej. operador escribiendo a un
  * cliente). Multi-empresa: va bajo `[companyId]` con `withTenant` (la membresía
  * del usuario en la empresa la valida el wrapper). Envía con el Kapso de la
- * empresa (`kapsoFor(ctx.company.id)`) y persiste con
+ * empresa (`botSendTextMsg` → Kapso o Evolution) y persiste con
  * `recordMessage({ …, companyId })` para que el chat/mensaje queden scopeados.
  *
  * Reemplaza la antigua `/api/messages/send` (global, single-tenant), que se
@@ -35,17 +36,16 @@ export const POST = withTenant(async (request, ctx) => {
     return Response.json({ ok: false, error: 'Invalid JSON' }, { status: 400 });
   }
 
-  // 1. Enviar vía Kapso de la empresa.
+  // 1. Enviar por el proveedor de WhatsApp de la empresa (Kapso o Evolution).
   let result;
   try {
-    const kapso = await kapsoFor(ctx.company.id);
-    result = await kapso.sendText(parsed.to, parsed.body);
+    result = await botSendTextMsg(ctx.company.id, parsed.to, parsed.body);
   } catch (err) {
     if (err instanceof MissingIntegrationError) {
       return Response.json({ ok: false, error: err.message }, { status: 503 });
     }
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[messages/send] Kapso error', err);
+    console.error('[messages/send] error de envío', err);
     return Response.json({ ok: false, error: message }, { status: 502 });
   }
 

@@ -1,6 +1,6 @@
 import { z } from 'zod';
-import { sendText } from '@/lib/kapso/client';
-import { recordMessage } from '@/lib/messaging';
+import { botSendTextMsg } from '@/lib/bot/sender';
+import { chatIdFor, recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
 import { withTenant } from '@/lib/tenant';
@@ -15,10 +15,9 @@ export const dynamic = 'force-dynamic';
  * vigencia = now + review_gift_expiry_days, y avisa al cliente por WhatsApp.
  * Solo aplica sobre rewards 'pendiente' de LA empresa.
  *
- * TODO(multi-empresa, transversal): el envío de WhatsApp (`sendText`,
- * `recordMessage`, catálogo `getMessage`) aún no recibe `companyId`; usa la
- * integración/credenciales/cache globales. Lo migra otro agente (helpers
- * compartidos). Lo persistible YA está scopeado por `company_id`.
+ * Multi-empresa: el envío sale por el proveedor de WhatsApp de LA empresa
+ * (`botSendTextMsg` → Kapso o Evolution) y tanto el catálogo de mensajes como
+ * la persistencia van scopeados por `company_id`.
  */
 const bodySchema = z.object({ grantedBy: z.string().email().max(200).optional() });
 
@@ -73,18 +72,19 @@ export const POST = withTenant<{ companyId: string; id: string }>(async (request
     .from('chats')
     .update({ status: 'bot' })
     .eq('company_id', companyId)
-    .eq('id', `wa:${r.phone}`);
+    .eq('id', chatIdFor(companyId, r.phone));
 
   // Avisar al cliente (no rompe la respuesta si falla).
   try {
-    const m = await getMessage('reward.aprobado');
+    const m = await getMessage('reward.aprobado', ctx.company.id);
     const bodyMsg = render(m.body, { postre });
-    const result = await sendText(r.phone, bodyMsg);
+    const result = await botSendTextMsg(ctx.company.id, r.phone, bodyMsg);
     await recordMessage({
       phone: r.phone,
       direction: 'bot',
       body: bodyMsg,
       kapsoMessageId: result.messages?.[0]?.id ?? null,
+      companyId: ctx.company.id,
     });
   } catch (err) {
     console.error('[rewards approve] notif error', err);

@@ -1,7 +1,8 @@
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api';
 import { env } from '../env';
 
-export const KAPSO_BASE_URL = 'https://app.kapso.ai/api/meta/';
+export { KAPSO_BASE_URL } from '@/lib/whatsapp/kapso/constants';
+import { KAPSO_BASE_URL } from '@/lib/whatsapp/kapso/constants';
 
 /** Credenciales Kapso para construir un cliente (por empresa o desde el env). */
 export interface KapsoClientCredentials {
