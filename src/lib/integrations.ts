@@ -1,6 +1,7 @@
 import { WhatsAppClient } from '@kapso/whatsapp-cloud-api';
 import { supabaseAdmin } from './db';
-import { KAPSO_BASE_URL } from './kapso/client';
+import { descifrarFila } from './crypto';
+import { KAPSO_BASE_URL } from './whatsapp/kapso/constants';
 
 /**
  * Integraciones POR EMPRESA (multi-empresa).
@@ -27,9 +28,21 @@ import { KAPSO_BASE_URL } from './kapso/client';
 /** Fila cruda de `company_integrations` (snake_case, tal cual la BD). */
 export interface CompanyIntegrations {
   company_id: string;
+  /** Proveedor de WhatsApp activo de la empresa. 'kapso' por defecto. */
+  whatsapp_provider: 'kapso' | 'evolution';
   kapso_phone_number_id: string | null;
   kapso_api_key: string | null;
   kapso_webhook_secret: string | null;
+  // Evolution API (self-hosted, canal no oficial)
+  evolution_base_url: string | null;
+  evolution_api_key: string | null;
+  evolution_instance: string | null;
+  evolution_webhook_token: string | null;
+  /** Estado de la sesión Evolution ('open'|'connecting'|'close'). Kapso: null. */
+  evolution_session_state: string | null;
+  evolution_session_updated_at: string | null;
+  /** Slug de la empresa (embebido). Se usa para derivar el nombre de instancia. */
+  company_slug: string | null;
   wompi_mode: string;
   wompi_public_key: string | null;
   wompi_integrity_secret: string | null;
@@ -68,7 +81,7 @@ export interface CompanyKapsoClient {
 export class MissingIntegrationError extends Error {
   constructor(
     public readonly companyId: string,
-    public readonly integration: 'kapso' | 'wompi',
+    public readonly integration: 'kapso' | 'evolution' | 'wompi',
     detail: string,
   ) {
     super(
@@ -116,7 +129,11 @@ export async function getCompanyIntegrations(
   const { data, error } = await supabaseAdmin()
     .from('company_integrations')
     .select(
-      'company_id, kapso_phone_number_id, kapso_api_key, kapso_webhook_secret, ' +
+      'company_id, whatsapp_provider, ' +
+        'kapso_phone_number_id, kapso_api_key, kapso_webhook_secret, ' +
+        'evolution_base_url, evolution_api_key, evolution_instance, evolution_webhook_token, ' +
+        'evolution_session_state, evolution_session_updated_at, ' +
+        'companies(slug), ' +
         'wompi_mode, wompi_public_key, wompi_integrity_secret, wompi_events_secret, updated_at',
     )
     .eq('company_id', companyId)
@@ -129,7 +146,16 @@ export async function getCompanyIntegrations(
     );
   }
 
-  const value = data as unknown as CompanyIntegrations;
+  // PostgREST devuelve el embed como objeto anidado; lo aplanamos.
+  // `descifrarFila` deja los secretos en claro para el resto del backend: nadie
+  // más tiene que acordarse de descifrar, y el cifrado no se filtra al código
+  // de negocio.
+  const raw = descifrarFila(data as unknown as Record<string, unknown>);
+  const embedded = raw.companies as { slug?: string } | null | undefined;
+  const value = {
+    ...raw,
+    company_slug: embedded?.slug ?? null,
+  } as unknown as CompanyIntegrations;
   cache.set(companyId, { value, expiresAt: now + CACHE_TTL_MS });
   return value;
 }
@@ -209,6 +235,95 @@ export async function kapsoFor(companyId: string): Promise<CompanyKapsoClient> {
         image: { link, ...(caption ? { caption } : {}) },
       }),
   };
+}
+
+// =========================================================================
+// Evolution (canal no oficial)
+// =========================================================================
+
+/** Credenciales Evolution resueltas y NO nulas para una empresa. */
+export interface EvolutionCredentials {
+  baseUrl: string;
+  apiKey: string;
+  instance: string;
+  webhookToken: string | null;
+}
+
+/**
+ * Devuelve las credenciales Evolution de una empresa, o lanza
+ * `MissingIntegrationError` si faltan las obligatorias.
+ *
+ * No se valida a nivel de BD (no hay CHECK) a propósito: el flujo de alta es
+ * "crear empresa → elegir proveedor → cargar credenciales", y un CHECK impediría
+ * el paso intermedio. La validación vive acá, igual que en `kapsoCredentialsFor`.
+ */
+export async function evolutionCredentialsFor(
+  companyId: string,
+): Promise<EvolutionCredentials> {
+  const row = await getCompanyIntegrations(companyId);
+
+  // Servidor COMPARTIDO de Skipfee por defecto. La fila de la empresa solo se
+  // usa como override (cliente que trae su propio servidor), no como requisito:
+  // al restaurante no se le pide infraestructura, únicamente escanea el QR.
+  const baseUrl = row.evolution_base_url ?? process.env.EVOLUTION_BASE_URL ?? null;
+  const apiKey = row.evolution_api_key ?? process.env.EVOLUTION_API_KEY ?? null;
+
+  if (!baseUrl) {
+    throw new MissingIntegrationError(
+      companyId,
+      'evolution',
+      'no hay servidor Evolution configurado (ni EVOLUTION_BASE_URL en el env, ' +
+        'ni evolution_base_url para esta empresa)',
+    );
+  }
+  if (!apiKey) {
+    throw new MissingIntegrationError(
+      companyId,
+      'evolution',
+      'falta la llave del servidor Evolution (EVOLUTION_API_KEY o evolution_api_key)',
+    );
+  }
+
+  return {
+    baseUrl,
+    apiKey,
+    // El nombre de instancia se deriva del slug la primera vez y se persiste al
+    // conectar (índice único en `evolution_instance`). Así cada negocio es una
+    // instancia identificable dentro del servidor compartido.
+    instance: row.evolution_instance ?? instanceNameFor(row.company_slug, companyId),
+    webhookToken: row.evolution_webhook_token,
+  };
+}
+
+/**
+ * Nombre de instancia para una empresa dentro del servidor compartido.
+ * Solo `[a-zA-Z0-9._-]` (viaja en la URL de Evolution). Cae al uuid si por
+ * alguna razón no hay slug.
+ */
+export function instanceNameFor(
+  slug: string | null | undefined,
+  companyId: string,
+): string {
+  const base = (slug ?? '').trim().toLowerCase().replace(/[^a-z0-9._-]/g, '-');
+  return base.length >= 2 ? base : `co-${companyId.slice(0, 8)}`;
+}
+
+/**
+ * Enruta un webhook entrante de Evolution a su empresa por el nombre de
+ * instancia. Análogo a `resolveCompanyByKapsoPhone`.
+ */
+export async function resolveCompanyByEvolutionInstance(
+  instance: string,
+): Promise<{ companyId: string } | null> {
+  const { data, error } = await supabaseAdmin()
+    .from('company_integrations')
+    .select('company_id')
+    .eq('evolution_instance', instance)
+    .maybeSingle();
+
+  if (error) throw error;
+  if (!data) return null;
+  return { companyId: data.company_id as string };
 }
 
 // =========================================================================
