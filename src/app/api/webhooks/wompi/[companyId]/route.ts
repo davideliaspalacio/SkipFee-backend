@@ -1,12 +1,19 @@
 import type { NextRequest } from 'next/server';
 import { z } from 'zod';
 import { supabaseAdmin } from '@/lib/db';
-import { recordMessage } from '@/lib/messaging';
+import { chatIdFor, recordMessage } from '@/lib/messaging';
 import { verifyWebhookSignature } from '@/lib/wompi/signature';
-import { wompiConfigFor, kapsoFor } from '@/lib/integrations';
+import { wompiConfigFor } from '@/lib/integrations';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
 import { redeemRewardForOrder } from '@/lib/orders/rewards';
+import { botSendTextMsg } from '@/lib/bot/sender';
+import {
+  isShareReference,
+  findShareByReference,
+  settleShareApproved,
+  settleShareFailed,
+} from '@/lib/dinein-split';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -87,12 +94,11 @@ async function notifyPaid(
     const customer = Array.isArray(order.customer) ? order.customer[0] : order.customer;
     const firstName = (customer?.name ?? '').split(' ')[0] || '';
     const saludo = firstName ? `Hola ${firstName}` : 'Hola';
-    const pagadoMsg = await getMessage('notif.pagado');
+    const pagadoMsg = await getMessage('notif.pagado', companyId);
     const body = render(pagadoMsg.body, { saludo, nombre: firstName });
 
-    // Envío por WhatsApp con el cliente Kapso de ESTA empresa.
-    const kapso = await kapsoFor(companyId);
-    const result = await kapso.sendText(order.phone, body);
+    // Envío por el proveedor de WhatsApp de ESTA empresa (Kapso o Evolution).
+    const result = await botSendTextMsg(companyId, order.phone, body);
     const wamid = result.messages?.[0]?.id ?? null;
     await recordMessage({
       phone: order.phone,
@@ -102,7 +108,7 @@ async function notifyPaid(
       companyId,
     });
 
-    const chatId = `wa:${companyId}:${order.phone}`;
+    const chatId = chatIdFor(companyId, order.phone);
     await sb
       .from('chats')
       .update({
@@ -145,6 +151,28 @@ async function handleMock(
   }
 
   const sb = supabaseAdmin();
+
+  // Split de mesa (mock): el reference-porción viaja como `orderId` del form.
+  if (isShareReference(parsed.orderId)) {
+    const share = await findShareByReference(sb, companyId, parsed.orderId);
+    if (!share) {
+      return respondMock(request, { ok: true, applied: false, reason: 'porción no encontrada' }, 404);
+    }
+    if (parsed.status !== 'APPROVED') {
+      const r = await settleShareFailed(
+        sb,
+        companyId,
+        share,
+        `mock-${Date.now()}`,
+        `Pago ${parsed.status.toLowerCase()}`,
+      );
+      return respondMock(request, { ok: true, split: true, ...r });
+    }
+    const cents = parsed.amount != null ? parsed.amount * 100 : share.amount * 100;
+    const r = await settleShareApproved(sb, companyId, share, `mock-${Date.now()}`, cents);
+    return respondMock(request, { ok: true, split: true, ...r });
+  }
+
   const { data: order } = (await sb
     .from('orders')
     .select('id, status, phone, total, wompi_tx_id, customer:customers(name)')
@@ -243,6 +271,33 @@ async function handleReal(
   }
 
   const sb = supabaseAdmin();
+
+  // Split de mesa: si el reference es de una porción (sp_*), liquidarla y (si se
+  // completó el total) cerrar la cuenta. No toca el flujo normal de órdenes.
+  if (isShareReference(txn.reference)) {
+    const share = await findShareByReference(sb, companyId, txn.reference);
+    if (!share) {
+      return Response.json({ ok: true, applied: false, reason: 'porción no encontrada' });
+    }
+    if (txn.currency !== 'COP') {
+      return Response.json({ ok: true, applied: false, reason: `currency ${txn.currency} != COP` });
+    }
+    if (txn.status === 'APPROVED') {
+      const r = await settleShareApproved(sb, companyId, share, txn.id, txn.amount_in_cents);
+      return Response.json({ ok: true, split: true, ...r });
+    }
+    if (txn.status === 'DECLINED' || txn.status === 'VOIDED' || txn.status === 'ERROR') {
+      const r = await settleShareFailed(
+        sb,
+        companyId,
+        share,
+        txn.id,
+        txn.status_message ?? `Pago ${txn.status.toLowerCase()}`,
+      );
+      return Response.json({ ok: true, split: true, ...r });
+    }
+    return Response.json({ ok: true, applied: false, reason: `txStatus=${txn.status} no terminal` });
+  }
 
   // Cargar la orden por reference (== orderId) SCOPEADA por empresa.
   const { data: order } = (await sb

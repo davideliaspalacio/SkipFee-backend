@@ -26,12 +26,19 @@ export const dynamic = 'force-dynamic';
  * aún sin migrar) NO especifica empresa. Coincide con el seed de la migración
  * 0038. TODO: volver `company` requerido cuando el bot pase el companyId.
  */
-const DEFAULT_COMPANY_ID = '00000000-0000-0000-0000-000000000001';
 
 const bodySchema = z.object({
   phone: z.string().regex(/^\d{8,15}$/, 'phone E.164 sin "+"'),
-  /** Slug de la empresa dueña del pedido. Opcional durante la transición. */
+  /**
+   * Empresa dueña del pedido. Se aceptan DOS formas porque las dos mitades de
+   * la migración multi-empresa se escribieron por separado:
+   *   - `company`   → slug (lo usa la tienda web)
+   *   - `companyId` → uuid (lo manda el bot, ver `bot/flow/handlers.ts`)
+   * Si no viene ninguna se cae a la empresa por defecto, que es lo que hacía
+   * que un pedido de OTRA empresa fallara con "Zona no existe".
+   */
   company: z.string().min(1).optional(),
+  companyId: z.string().uuid().optional(),
   ttlMinutes: z.number().int().positive().max(1440).optional(),
   /** Datos del cliente. Si vienen, se hace upsert por phone. */
   customer: z
@@ -76,18 +83,27 @@ export async function POST(request: NextRequest) {
   // Multi-empresa: resolver la empresa dueña del pedido. Si el caller mandó
   // `company` (slug), lo resolvemos; si no, caemos a la empresa por defecto
   // (el bot aún sin migrar). TODO: requerir `company` cuando el bot lo pase.
-  let companyId = DEFAULT_COMPANY_ID;
-  if (parsed.company) {
-    const { data: company } = await sb
-      .from('companies')
-      .select('id, status')
-      .eq('slug', parsed.company)
-      .maybeSingle();
-    if (!company || company.status === 'suspended') {
-      return jsonWithCors({ ok: false, error: `Empresa no encontrada: ${parsed.company}` }, 404);
-    }
-    companyId = company.id as string;
+  // La empresa es OBLIGATORIA. Antes había un fallback silencioso a la empresa
+  // del piloto: un caller que olvidara mandarla creaba el pedido dentro de OTRO
+  // negocio, sin error y sin log. Con varias empresas eso es fuga de pedidos
+  // entre tenants, así que ahora falla ruidosamente.
+  if (!parsed.company && !parsed.companyId) {
+    return jsonWithCors(
+      { ok: false, error: 'Falta la empresa: manda `companyId` (uuid) o `company` (slug).' },
+      400,
+    );
   }
+
+  const query = sb.from('companies').select('id, status');
+  const { data: company } = await (parsed.companyId
+    ? query.eq('id', parsed.companyId)
+    : query.eq('slug', parsed.company!)
+  ).maybeSingle();
+  const ref = parsed.companyId ?? parsed.company;
+  if (!company || company.status === 'suspended') {
+    return jsonWithCors({ ok: false, error: `Empresa no encontrada: ${ref}` }, 404);
+  }
+  const companyId = company.id as string;
 
   // 1. Si vino dirección + zona: resolver la zona para sacar lat/lng de fallback.
   let zone: { id: string; lat: number; lng: number } | null = null;
