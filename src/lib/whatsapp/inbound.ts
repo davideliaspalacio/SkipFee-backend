@@ -15,6 +15,7 @@ import { recordMessage } from '@/lib/messaging';
 import { supabaseAdmin } from '@/lib/db';
 import { processFlowMessage } from '@/lib/bot/flow';
 import type { IncomingMessage } from '@/lib/bot/flow/parser';
+import { avisarSiFiltroActivo, numeroPermitido } from './allowlist';
 import { matchPendingOption } from './degrade';
 import { clearPendingOptions, loadPendingOptions } from './pending';
 import type { InboundEnvelope } from './types';
@@ -147,7 +148,17 @@ export async function handleInboundMessage(
   // escrito tres pasos después reactivaría una opción vieja.
   if (hadPending) await clearPendingOptions(chatId);
 
-  // 3. ¿El chat está en modo bot?
+  // 3. Lista blanca de desarrollo: el mensaje YA quedó guardado y se ve en el
+  //    panel, pero no se despacha el bot. Se corta aquí y no solo en el envío
+  //    para no gastar Gemini ni mover el `flow_state` de un cliente real por un
+  //    mensaje que nadie va a contestar automáticamente.
+  avisarSiFiltroActivo();
+  if (!numeroPermitido(envelope.from)) {
+    console.warn(`[bot] ${envelope.from} fuera de WHATSAPP_ALLOWLIST: guardado, sin respuesta`);
+    return;
+  }
+
+  // 4. ¿El chat está en modo bot?
   let chatQuery = supabaseAdmin().from('chats').select('status').eq('id', chatId);
   if (companyId) chatQuery = chatQuery.eq('company_id', companyId);
   const { data: chat } = await chatQuery.single();

@@ -69,6 +69,11 @@ const schema = z.object({
   // `company_integrations.evolution_*` sigue existiendo como OVERRIDE por
   // empresa, para el caso raro de un cliente que traiga su propio servidor.
   // Si la fila trae valores, ganan sobre estos.
+  // Lista blanca de desarrollo: si tiene números (separados por coma), el bot
+  // SOLO le contesta a esos. Vacía = todos, que es producción. Ver
+  // `lib/whatsapp/allowlist.ts`.
+  WHATSAPP_ALLOWLIST: z.preprocess(emptyToUndefined, z.string().optional()),
+
   EVOLUTION_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
   EVOLUTION_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
 
