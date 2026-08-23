@@ -1,10 +1,11 @@
 import type { NextRequest } from 'next/server';
 import { supabaseAdmin } from '@/lib/db';
-import { kapsoFor, MissingIntegrationError } from '@/lib/integrations';
+import { MissingIntegrationError } from '@/lib/integrations';
 import { recordMessage } from '@/lib/messaging';
 import { env } from '@/lib/env';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
+import { botSendTextMsg } from '@/lib/bot/sender';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -26,7 +27,7 @@ export const dynamic = 'force-dynamic';
  *
  * Multi-empresa: pg_cron llama un endpoint global; aquí iteramos por empresa
  * activa, scopeamos los chats candidatos por `company_id` y enviamos el nudge con
- * el Kapso de la empresa (`kapsoFor(companyId)`), persistiendo con
+ * el proveedor de WhatsApp de la empresa (`botSendTextMsg`), persistiendo con
  * `recordMessage({ …, companyId })`. Las empresas sin credenciales Kapso se
  * saltan (MissingIntegrationError) sin romper al resto.
  */
@@ -100,7 +101,6 @@ export async function POST(request: NextRequest) {
     totalCandidates += candidates.length;
 
     // Cliente Kapso de la empresa (perezoso: solo si hay algo que enviar).
-    let kapso: Awaited<ReturnType<typeof kapsoFor>> | null = null;
 
     for (const chat of candidates) {
       const step = chat.flow_state?.step;
@@ -123,16 +123,15 @@ export async function POST(request: NextRequest) {
       if (chat.flow_state?.reminderSentAt) continue;
 
       // Recordatorio editable por step; cae a `nudge.default` si no hay uno propio.
-      let nudge = await getMessage(`nudge.${step}`);
-      if (!nudge.body) nudge = await getMessage('nudge.default');
+      let nudge = await getMessage(`nudge.${step}`, companyId);
+      if (!nudge.body) nudge = await getMessage('nudge.default', companyId);
       if (!nudge.enabled) continue; // recordatorio apagado desde la UI
       const nudgeBody = render(nudge.body);
 
       try {
-        if (!kapso) {
-          kapso = await kapsoFor(companyId); // lanza MissingIntegrationError
-        }
-        const result = await kapso.sendText(chat.phone, nudgeBody);
+        // Enruta por el proveedor de la empresa. Lanza MissingIntegrationError
+        // si no tiene credenciales del proveedor que eligió.
+        const result = await botSendTextMsg(companyId, chat.phone, nudgeBody);
         const wamid = result.messages?.[0]?.id ?? null;
         await recordMessage({
           phone: chat.phone,
