@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { sendImage, sendText } from '@/lib/kapso/client';
+import { botSendImageMsg, botSendTextMsg } from '@/lib/bot/sender';
 import { serializeMessage } from '@/lib/serializers';
 import { withTenant } from '@/lib/tenant';
 
@@ -61,7 +61,7 @@ function hhmm(date = new Date()): string {
  * POST /api/<companyId>/chats/:id/messages
  * El operario responde al cliente desde el panel:
  * 1. Resuelve el chat de LA empresa (necesita phone para sendText).
- * 2. Envía vía Kapso.
+ * 2. Envía por el proveedor de WhatsApp de la empresa (Kapso o Evolution).
  * 3. Persiste el mensaje saliente con kapsoMessageId, scopeado por empresa.
  *
  * Nota: este endpoint NO toca chat.status. Se asume que el operario ya tomó
@@ -102,11 +102,15 @@ export const POST = withTenant<{ companyId: string; id: string }>(async (request
   let result;
   try {
     result = parsed.imageUrl
-      ? await sendImage(chat.phone, parsed.imageUrl, caption || undefined)
-      : await sendText(chat.phone, caption);
+      ? await botSendImageMsg(ctx.company.id, {
+          to: chat.phone,
+          link: parsed.imageUrl,
+          caption: caption || undefined,
+        })
+      : await botSendTextMsg(ctx.company.id, chat.phone, caption);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[chats/messages] Kapso error', err);
+    console.error('[chats/messages] error de envío', err);
     return Response.json({ ok: false, error: message }, { status: 502 });
   }
 

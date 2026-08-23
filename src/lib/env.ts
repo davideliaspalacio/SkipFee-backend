@@ -1,5 +1,13 @@
 import { z } from 'zod';
 
+/**
+ * En un archivo .env una variable "vacía" se escribe `VAR=""`, y eso llega como
+ * cadena vacía, NO como undefined: `.optional()` no aplica y validaciones como
+ * `.url()` fallan. Como la validación del env es todo-o-nada, una sola variable
+ * opcional vacía tumba el arranque y devuelve 500 en TODAS las rutas.
+ */
+const emptyToUndefined = (v: unknown) => (v === '' ? undefined : v);
+
 const schema = z.object({
   // --- Kapso ---
   // Multi-empresa: las credenciales Kapso ahora viven POR EMPRESA en
@@ -44,6 +52,31 @@ const schema = z.object({
   // el futuro necesitamos consultar transactions / refunds desde el backend.
   WOMPI_PRIVATE_KEY: z.string().optional(),
 
+  // --- Registro público ---
+  // Cloudflare Turnstile: captcha invisible y gratis, primera defensa del signup.
+  // Si falta, el registro FUNCIONA IGUAL pero sin esa capa — aceptable en dev,
+  // no en producción.
+  TURNSTILE_SECRET_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  // Origen del panel, para el enlace de recuperación de contraseña.
+  PANEL_ORIGIN: z.preprocess(emptyToUndefined, z.string().url().optional()),
+
+  // --- Evolution API (WhatsApp no oficial, servidor COMPARTIDO de Skipfee) ---
+  // Modelo: Skipfee opera UN servidor Evolution y cada negocio es una INSTANCIA
+  // dentro de él. Por eso las credenciales del servidor son del env (nuestras),
+  // no de cada empresa: al restaurante no se le pide infraestructura, solo
+  // escanea un QR.
+  //
+  // `company_integrations.evolution_*` sigue existiendo como OVERRIDE por
+  // empresa, para el caso raro de un cliente que traiga su propio servidor.
+  // Si la fila trae valores, ganan sobre estos.
+  // Lista blanca de desarrollo: si tiene números (separados por coma), el bot
+  // SOLO le contesta a esos. Vacía = todos, que es producción. Ver
+  // `lib/whatsapp/allowlist.ts`.
+  WHATSAPP_ALLOWLIST: z.preprocess(emptyToUndefined, z.string().optional()),
+
+  EVOLUTION_BASE_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  EVOLUTION_API_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+
   // --- Google Maps (Geocoding server-side · Tarea 2) ---
   // Opcional para no romper el dev de quien no la configuró. Si falta, el bot
   // cae al camino manual de zona (no geocodifica). Requiere Geocoding API + billing.
@@ -52,11 +85,22 @@ const schema = z.object({
   // --- Discord (aviso de leads de la landing) ---
   // Webhook al que POST /api/leads avisa cada pre-registro. Opcional: si falta,
   // el lead igual se guarda en Supabase y simplemente no se manda a Discord.
-  DISCORD_WEBHOOK_URL: z.string().url().optional(),
+  DISCORD_WEBHOOK_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
+  // Cifrado en reposo de `company_integrations`. Opcional para no tumbar un dev
+  // que aún no la configuró; sin ella los secretos se guardan en claro y el
+  // backend lo avisa por consola. Ver `lib/crypto.ts`.
+  CREDENTIALS_KEY: z.preprocess(emptyToUndefined, z.string().optional()),
+  // Verificación de correo en el registro público. Apagada mientras no haya
+  // servicio de envío: exigirla sin poder mandar el correo deja al usuario
+  // registrado y sin poder entrar. Prender con 'true' cuando lo haya.
+  SIGNUP_REQUIRE_EMAIL_CONFIRMATION: z.preprocess(emptyToUndefined, z.string().optional()),
+  // Altas por IP y hora en el registro público. 0 = sin límite. Sin valor: 3 en
+  // producción, sin límite en desarrollo (ver `lib/signup-guard.ts`).
+  SIGNUP_MAX_POR_HORA: z.preprocess(emptyToUndefined, z.coerce.number().int().min(0).optional()),
 
   // --- Discord (aviso de visitas a la DEMO del panel) ---
   // Webhook para POST /api/demo-visit. Opcional: si falta, cae a DISCORD_WEBHOOK_URL.
-  DISCORD_DEMO_WEBHOOK_URL: z.string().url().optional(),
+  DISCORD_DEMO_WEBHOOK_URL: z.preprocess(emptyToUndefined, z.string().url().optional()),
 
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
 });

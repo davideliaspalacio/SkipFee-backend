@@ -1,6 +1,8 @@
 import type { NextRequest } from 'next/server';
 import { buildSessionCookies, getSessionUser } from '@/lib/auth';
 import { supabaseAdmin } from '@/lib/db';
+import { diasRestantes } from '@/lib/trial';
+import { mapEvolutionState } from '@/lib/whatsapp/evolution/parse';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -53,40 +55,103 @@ export async function GET(request: NextRequest) {
     companySlug: string;
     companyName: string;
     role: string;
+    /** Suscripción de esa empresa: el panel avisa los días que quedan de prueba. */
+    plan: string;
+    status: string;
+    trialEndsAt: string | null;
+    diasRestantes: number | null;
+    /** null = nunca estuvo operativo (sigue en el onboarding). */
+    operativoDesde: string | null;
+    /** Estado del canal de WhatsApp. Solo se usa para alertar si ya operaba. */
+    whatsapp: 'connected' | 'connecting' | 'disconnected' | 'unknown' | null;
   };
   let memberships: Membership[] = [];
 
+  // Las columnas de suscripción llegan con la migración 0053. Si la BD todavía
+  // no la tiene, PostgREST responde 42703 y el SELECT entero falla: sin este
+  // fallback, una migración pendiente deja a TODO el panel sin membresías (=
+  // sin navegación) en vez de solo sin el aviso de prueba.
+  // `company_integrations` viaja embebido: es el único dato que falta para que
+  // el panel pueda avisar "tu WhatsApp está caído" en cualquier pantalla sin
+  // una consulta extra por render.
+  const COLUMNAS_CON_PLAN =
+    'code, slug, name, status, plan, trial_ends_at, operativo_desde, ' +
+    'company_integrations(whatsapp_provider, evolution_session_state)';
+  const COLUMNAS_BASE = 'code, slug, name, status';
+
+  type Integraciones = { whatsapp_provider?: string | null; evolution_session_state?: string | null };
+  type FilaEmpresa = {
+    code: number;
+    slug: string;
+    name: string;
+    status: string | null;
+    plan?: string | null;
+    trial_ends_at?: string | null;
+    operativo_desde?: string | null;
+    company_integrations?: Integraciones | Integraciones[] | null;
+  };
+
+  /**
+   * Estado del canal, solo para Evolution. Kapso no tiene sesión que se caiga:
+   * si su número está verificado, sigue vivo, así que devolver un estado ahí
+   * sería inventar una alarma que no existe.
+   */
+  const estadoWhatsApp = (c: FilaEmpresa): Membership['whatsapp'] => {
+    const raw = c.company_integrations;
+    const fila = (Array.isArray(raw) ? raw[0] : raw) ?? null;
+    if (!fila || fila.whatsapp_provider !== 'evolution') return null;
+    return mapEvolutionState(fila.evolution_session_state);
+  };
+
   if (isPlatformAdmin) {
     // El owner ve todas las empresas (rol 'platform' sobre cada una).
-    const { data: companies } = await admin
-      .from('companies')
-      .select('code, slug, name')
-      .order('name');
+    const conPlan = await admin.from('companies').select(COLUMNAS_CON_PLAN).order('name');
+    const companies: FilaEmpresa[] | null = conPlan.error
+      ? ((await admin.from('companies').select(COLUMNAS_BASE).order('name'))
+          .data as unknown as FilaEmpresa[] | null)
+      : (conPlan.data as unknown as FilaEmpresa[] | null);
     memberships = (companies ?? []).map(c => ({
       companyCode: c.code as number,
       companySlug: c.slug as string,
       companyName: c.name as string,
       role: 'platform',
+      plan: c.plan ?? 'cortesia',
+      status: c.status ?? 'active',
+      trialEndsAt: c.trial_ends_at ?? null,
+      diasRestantes: diasRestantes(c.trial_ends_at ?? null),
+      operativoDesde: c.operativo_desde ?? null,
+      whatsapp: estadoWhatsApp(c),
     }));
   } else {
     // Membresías del usuario: company_members ⨝ companies.
-    const { data: rows } = await admin
+    type FilaMembresia = { role: string; companies: unknown };
+    const conPlan = await admin
       .from('company_members')
-      .select('role, companies(code, slug, name)')
+      .select(`role, companies(${COLUMNAS_CON_PLAN})`)
       .eq('user_id', session.user.id);
+    const rows: FilaMembresia[] | null = conPlan.error
+      ? ((
+          await admin
+            .from('company_members')
+            .select(`role, companies(${COLUMNAS_BASE})`)
+            .eq('user_id', session.user.id)
+        ).data as FilaMembresia[] | null)
+      : (conPlan.data as FilaMembresia[] | null);
     memberships = (rows ?? [])
       .map(r => {
-        const company = r.companies as unknown as {
-          code: number;
-          slug: string;
-          name: string;
-        } | null;
+        const company = r.companies as unknown as FilaEmpresa | null;
         if (!company) return null;
         return {
           companyCode: company.code,
           companySlug: company.slug,
           companyName: company.name,
           role: r.role as string,
+          plan: company.plan ?? 'cortesia',
+          status: company.status ?? 'active',
+          trialEndsAt: company.trial_ends_at ?? null,
+          diasRestantes: diasRestantes(company.trial_ends_at ?? null),
+          operativoDesde: company.operativo_desde ?? null,
+          whatsapp: estadoWhatsApp(company),
         };
       })
       .filter((m): m is Membership => m !== null);

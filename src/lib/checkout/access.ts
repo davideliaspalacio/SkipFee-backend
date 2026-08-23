@@ -38,6 +38,7 @@ const PUBLIC_PREFIXES = [
   '/api/products/available',
   '/api/cron/',
   '/api/checkout/', // la tienda web (secreto = orderId); CORS propio en cada route
+  '/api/storefront/', // vitrina pública de un negocio: <slug>.skipfee.co
 ];
 
 /**
@@ -98,5 +99,44 @@ export function allowedOrigins(): string[] {
 /** True si el `Origin` del request está en la lista de permitidos. */
 export function isAllowedOrigin(origin: string | null): boolean {
   if (!origin) return false;
-  return allowedOrigins().includes(origin);
+  if (allowedOrigins().includes(origin)) return true;
+  return esSubdominioDeTienda(origin);
+}
+
+/**
+ * Dominios de negocio: `https://arepas.skipfee.co`.
+ *
+ * Cada restaurante tiene su propia dirección, así que la lista fija de orígenes
+ * no sirve — no se puede enumerar algo que crece cada vez que alguien se
+ * registra. Se acepta cualquier subdominio de un nivel sobre las raíces de
+ * `STOREFRONT_WILDCARD_ROOTS` (por defecto skipfee.co).
+ *
+ * Tres cuidados, porque esto relaja CORS:
+ *   - Solo https, para que no entre un `http://` suplantando.
+ *   - Solo UN nivel: `algo.arepas.skipfee.co` no pasa.
+ *   - Coincidencia por sufijo con el punto incluido, así `noskipfee.co` no
+ *     cuela por terminar en las mismas letras.
+ */
+export function esSubdominioDeTienda(origin: string): boolean {
+  let host: string;
+  let protocolo: string;
+  try {
+    const url = new URL(origin);
+    host = url.hostname.toLowerCase();
+    protocolo = url.protocol;
+  } catch {
+    return false;
+  }
+  if (protocolo !== 'https:') return false;
+
+  const raices = (process.env.STOREFRONT_WILDCARD_ROOTS ?? 'skipfee.co')
+    .split(',')
+    .map(r => r.trim().toLowerCase())
+    .filter(Boolean);
+
+  return raices.some(raiz => {
+    if (!host.endsWith(`.${raiz}`)) return false;
+    const prefijo = host.slice(0, -(raiz.length + 1));
+    return prefijo.length > 0 && !prefijo.includes('.');
+  });
 }

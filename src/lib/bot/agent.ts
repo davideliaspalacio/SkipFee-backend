@@ -1,6 +1,7 @@
 import type { Content, FunctionCall } from '@google/genai';
 import { gemini, geminiModel } from './gemini';
 import { buildSystemPrompt } from './prompt';
+import { loadBusinessContext } from './business-context';
 import {
   toolDefinitions,
   consultarCarta,
@@ -34,7 +35,7 @@ export async function botProcessMessage(opts: {
   const companyId = opts.companyId;
 
   // 1. Cargar contexto del cliente (si existe) y últimos mensajes del chat
-  const [{ data: chat }, { data: history }] = await Promise.all([
+  const [{ data: chat }, { data: history }, business] = await Promise.all([
     sb
       .from('chats')
       .select('name, phone, customer_id, customer:customers(name, addr, zone_id, tag, pedidos)')
@@ -46,6 +47,8 @@ export async function botProcessMessage(opts: {
       .eq('chat_id', opts.chatId)
       .order('created_at', { ascending: false })
       .limit(10),
+    // Identidad real de la empresa: sin esto el prompt decía ser el negocio piloto.
+    loadBusinessContext(companyId),
   ]);
 
   const customerRow = Array.isArray(chat?.customer) ? chat?.customer[0] : chat?.customer;
@@ -60,6 +63,7 @@ export async function botProcessMessage(opts: {
           prevOrders: customerRow.pedidos,
         }
       : { name: chat?.name },
+    business,
   });
 
   // Construye historial Gemini (orden cronológico ascendente)

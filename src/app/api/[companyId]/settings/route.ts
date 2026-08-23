@@ -44,14 +44,21 @@ export const GET = withTenant(async (_request, ctx) => {
       surveyEnabled: data.survey_enabled ?? true,
       surveyDelayMinutes: data.survey_delay_minutes ?? 30,
       reviewGiftEnabled: data.review_gift_enabled ?? true,
-      reviewGiftName: data.review_gift_name ?? 'Postre',
+      reviewGiftName: data.review_gift_name ?? null,
       reviewGiftExpiryDays: data.review_gift_expiry_days ?? 30,
-      reviewLink: data.review_link ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
+      // Sin fallback: era el Google Maps del negocio piloto.
+      reviewLink: data.review_link ?? null,
       surveyMinDays: data.survey_min_days ?? 30,
       reviewGiftProductId: data.review_gift_product_id ?? null,
       // Origen de los domicilios (panel Despachos). Tiene defaults para que el
       // panel funcione aunque el dueño no haya configurado la dirección.
       localAddress: data.local_address ?? null,
+      // En qué se especializa el negocio. Lo usa el prompt del bot para
+      // presentarse; sin esto se presenta como un restaurante genérico.
+      businessDescription: data.business_description ?? null,
+      // Marca del negocio: la tienda se pinta con esto.
+      logoUrl: data.logo_url ?? null,
+      brandColor: data.brand_color ?? null,
       localLat: data.local_lat,
       localLng: data.local_lng,
       localLabel: data.local_label,
@@ -87,6 +94,14 @@ const patchSchema = z.object({
   reviewGiftProductId: z.string().min(1).max(60).nullable().optional(),
   // Dirección del local (origen de los domicilios).
   localAddress: z.string().max(200).nullable().optional(),
+  businessDescription: z.string().max(300).nullable().optional(),
+  logoUrl: z.string().url().max(500).nullable().optional(),
+  // Se inyecta en el CSS de la tienda: solo hex de 6 dígitos, nada libre.
+  brandColor: z
+    .string()
+    .regex(/^#[0-9a-fA-F]{6}$/, 'Usa un color en formato #RRGGBB')
+    .nullable()
+    .optional(),
   localLat: z.number().min(-90).max(90).optional(),
   localLng: z.number().min(-180).max(180).optional(),
   localLabel: z.string().min(1).max(40).optional(),
@@ -128,6 +143,9 @@ export const PATCH = withTenant(async (request, ctx) => {
   if (body.surveyMinDays !== undefined) update.survey_min_days = body.surveyMinDays;
   if (body.reviewGiftProductId !== undefined) update.review_gift_product_id = body.reviewGiftProductId;
   if (body.localAddress !== undefined) update.local_address = body.localAddress;
+  if (body.businessDescription !== undefined) update.business_description = body.businessDescription;
+  if (body.logoUrl !== undefined) update.logo_url = body.logoUrl;
+  if (body.brandColor !== undefined) update.brand_color = body.brandColor;
   if (body.localLat !== undefined) update.local_lat = body.localLat;
   if (body.localLng !== undefined) update.local_lng = body.localLng;
   if (body.localLabel !== undefined) update.local_label = body.localLabel;

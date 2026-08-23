@@ -5,6 +5,7 @@ import { buildCatalog, classifyOrder, emptyCart } from '@/lib/checkout/shape';
 import { giftCartLine } from '@/lib/checkout/gift';
 import { computeOrderTotals, type TotalsProduct, type TotalsZone } from '@/lib/checkout/totals';
 import { loadOpenState } from '@/lib/hours';
+import { wompiConfigFor } from '@/lib/integrations';
 import type { PromotionRow } from '@/lib/checkout/promotions';
 
 export const runtime = 'nodejs';
@@ -94,16 +95,35 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
   // Multi-empresa: TODO se scopea por la empresa del pedido (`order.company_id`).
   const companyId = order.company_id;
   const nowIso = new Date().toISOString();
-  const [{ data: products }, { data: zones }, { data: settings }, { data: promotions }, openState] = await Promise.all([
+  const [
+    { data: products },
+    { data: zones },
+    { data: settings },
+    { data: promotions },
+    openState,
+    { data: company },
+    wompi,
+  ] = await Promise.all([
     sb.from('products').select('id, name, price, cat, available, img, description').eq('company_id', companyId).eq('available', true).eq('archived', false).order('cat').order('name'),
     sb.from('zones').select('id, name, tarifa, recargo, color, lat, lng').eq('company_id', companyId).order('name'),
-    sb.from('settings').select('peak_start, peak_end, base_delivery_fee').eq('company_id', companyId).single(),
+    // `*` y no una lista de columnas: `settings` es una sola fila y así agregar
+    // un campo de marca no obliga a que la migración esté aplicada para que la
+    // tienda —que es pública— siga cargando.
+    sb.from('settings').select('*').eq('company_id', companyId).single(),
     sb.from('promotions')
       .select('id, kind, name, description, discount_type, discount_value, min_subtotal, config, active, starts_at, ends_at')
       .eq('company_id', companyId)
       .eq('active', true)
       .eq('archived', false),
     loadOpenState(sb, new Date(), companyId),
+    // La tienda es del restaurante, no de Skipfee: su nombre y su marca van
+    // arriba. Ver nuestra marca en la pantalla de pago es donde el comensal
+    // duda antes de poner la tarjeta.
+    sb.from('companies').select('name').eq('id', companyId).maybeSingle(),
+    // Modo de cobro: la tienda avisa cuando un pago no mueve dinero. Un
+    // comensal no tiene forma de distinguir un widget de sandbox de uno real,
+    // y creer que pagó cuando no pagó es peor que no poder pagar.
+    wompiConfigFor(companyId).catch(() => null),
   ]);
 
   // `img` y `description` los agregamos al SELECT para embeberlos en el
@@ -193,6 +213,18 @@ export async function GET(_request: NextRequest, ctx: { params: Promise<{ orderI
       })),
     ),
     zones: zoneList.map(z => ({ id: z.id, name: z.name ?? '', tarifa: z.tarifa, recargo: z.recargo })),
+    /** 'simulado' | 'pruebas' | 'produccion' — para el aviso de la tienda. */
+    paymentMode:
+      !wompi || wompi.mode !== 'real'
+        ? 'simulado'
+        : wompi.publicKey?.startsWith('pub_test_')
+          ? 'pruebas'
+          : 'produccion',
+    business: {
+      name: (company?.name as string | undefined) ?? null,
+      logoUrl: (settings as { logo_url?: string | null } | null)?.logo_url ?? null,
+      brandColor: (settings as { brand_color?: string | null } | null)?.brand_color ?? null,
+    },
     // Estado de operación: la tienda muestra "cerrado" y bloquea el pago si está cerrado.
     businessOpen: openState.open,
     opensLabel: openState.opensLabel,

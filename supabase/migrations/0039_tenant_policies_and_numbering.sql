@@ -52,9 +52,12 @@ ALTER TABLE orders DROP CONSTRAINT IF EXISTS orders_order_number_unique;
 DROP SEQUENCE IF EXISTS orders_order_number_seq;
 
 -- Unicidad por empresa.
-ALTER TABLE orders ADD CONSTRAINT orders_company_order_number_unique
-  UNIQUE (company_id, order_number);
-
+DO $c$ BEGIN
+  ALTER TABLE orders ADD CONSTRAINT orders_company_order_number_unique
+    UNIQUE (company_id, order_number);
+EXCEPTION WHEN duplicate_object THEN NULL;
+          WHEN duplicate_table  THEN NULL;
+END $c$;
 -- Poner el contador de cada empresa por encima de sus pedidos ya existentes
 -- (la empresa por defecto puede tener pedidos del seed/demo).
 UPDATE companies c

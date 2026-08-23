@@ -30,8 +30,69 @@ function makeStub() {
     zones: {
       single: { id: 'poblado', lat: 6.2087, lng: -75.5658 },
     },
+    // La ruta ya no tiene fallback a una empresa por defecto: hay que resolverla.
+    companies: { single: { id: 'company-uuid-1', status: 'active' } },
   });
 }
+
+/**
+ * Regresión: el bot manda `companyId` (uuid) y la tienda web manda `company`
+ * (slug). La ruta solo leía `company`, así que un pedido del bot de OTRA
+ * empresa caía a la empresa por defecto y moría con "Zona no existe: …".
+ */
+describe('POST /api/checkout/sessions · resolución de empresa', () => {
+  const insertCapture = vi.fn();
+
+  beforeEach(() => {
+    process.env.STOREFRONT_ORIGIN = 'http://localhost:5173';
+    insertCapture.mockReset();
+    supabaseStub = makeSupabaseStub({
+      orders: {
+        onInsert: (p) => {
+          insertCapture(p);
+          return { data: { id: (p as { id: string }).id, expires_at: null } };
+        },
+      },
+      companies: { single: { id: 'company-uuid-2', status: 'active' } },
+      zones: { single: { id: 'parrilla-poblado', lat: 6.2088, lng: -75.5673 } },
+    });
+  });
+
+  it('acepta companyId (uuid) del bot y crea el pedido en ESA empresa', async () => {
+    const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
+      phone: '573001234567',
+      companyId: '775c76b2-202c-40f4-afac-0a8d5c590e75',
+      delivery: { address: 'Cra 43A #5-15', zoneId: 'parrilla-poblado' },
+    }));
+    expect(res.status).toBe(200);
+    expect((await res.json()).ok).toBe(true);
+    // Lo que prueba el arreglo: NO cae a la empresa por defecto.
+    expect(insertCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ company_id: 'company-uuid-2' }),
+    );
+  });
+
+  it('sigue aceptando company (slug) de la tienda web', async () => {
+    const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
+      phone: '573001234567',
+      company: 'la-parrilla',
+    }));
+    expect(res.status).toBe(200);
+    expect(insertCapture).toHaveBeenCalledWith(
+      expect.objectContaining({ company_id: 'company-uuid-2' }),
+    );
+  });
+
+  it('sin empresa devuelve 400 en vez de crear el pedido en la empresa equivocada', async () => {
+    const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
+      phone: '573001234567',
+    }));
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toContain('Falta la empresa');
+    // Lo importante: NO se creó ningún pedido.
+    expect(insertCapture).not.toHaveBeenCalled();
+  });
+});
 
 describe('POST /api/checkout/sessions', () => {
   const ORIGINAL = process.env.STOREFRONT_ORIGIN;
@@ -50,6 +111,7 @@ describe('POST /api/checkout/sessions', () => {
     const before = Date.now();
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913188',
+      company: 'bros-and-subs',
     }));
     expect(res.status).toBe(200);
     const body = await res.json();
@@ -78,6 +140,7 @@ describe('POST /api/checkout/sessions', () => {
     const before = Date.now();
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913188',
+      company: 'bros-and-subs',
       ttlMinutes: 10,
     }));
     const body = await res.json();
@@ -89,6 +152,7 @@ describe('POST /api/checkout/sessions', () => {
   it('con customer + delivery: upsert customer y persiste customer_id + address + zone_id + lat/lng', async () => {
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913188',
+      company: 'bros-and-subs',
       customer: { name: 'Edison Bedoya', email: 'edison@gmail.com' },
       delivery: { address: 'Cra 43A #5-15', zoneId: 'poblado' },
     }));
@@ -117,6 +181,7 @@ describe('POST /api/checkout/sessions', () => {
   it('email opcional: cliente sin email igual hace upsert con email null', async () => {
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913188',
+      company: 'bros-and-subs',
       customer: { name: 'Ana' },
       delivery: { address: 'Cra 1', zoneId: 'poblado' },
     }));
@@ -129,6 +194,8 @@ describe('POST /api/checkout/sessions', () => {
   it('persist=false + cliente existente ⇒ NO sobreescribe la dirección guardada', async () => {
     const updateCapture = vi.fn();
     supabaseStub = makeSupabaseStub({
+      // La ruta ya no cae a una empresa por defecto.
+      companies: { single: { id: 'company-uuid-1', status: 'active' } },
       zones: { single: { id: 'poblado', lat: 6.2087, lng: -75.5658 } },
       customers: {
         single: { id: 'cust-uuid-1' }, // ya existe
@@ -145,6 +212,7 @@ describe('POST /api/checkout/sessions', () => {
     });
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913188',
+      company: 'bros-and-subs',
       customer: { name: 'Edison Bedoya', email: 'edison@gmail.com' },
       delivery: { address: 'Oficina de un amigo', zoneId: 'poblado', persist: false },
     }));
@@ -164,6 +232,8 @@ describe('POST /api/checkout/sessions', () => {
 
   it('persist=false + cliente nuevo ⇒ lo crea con la dirección (no hay nada que preservar)', async () => {
     supabaseStub = makeSupabaseStub({
+      // La ruta ya no cae a una empresa por defecto.
+      companies: { single: { id: 'company-uuid-1', status: 'active' } },
       zones: { single: { id: 'poblado', lat: 6.2087, lng: -75.5658 } },
       customers: {
         single: null, // no existe
@@ -179,6 +249,7 @@ describe('POST /api/checkout/sessions', () => {
     });
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913189',
+      company: 'bros-and-subs',
       customer: { name: 'Nuevo Cliente' },
       delivery: { address: 'Cra 1 #2-3', zoneId: 'poblado', persist: false },
     }));
@@ -190,6 +261,7 @@ describe('POST /api/checkout/sessions', () => {
   it('delivery con lat/lng reales ⇒ la orden usa esas coords (no el centro de zona)', async () => {
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913188',
+      company: 'bros-and-subs',
       customer: { name: 'Ana' },
       delivery: { address: 'Cra 1', zoneId: 'poblado', lat: 6.25, lng: -75.6 },
     }));
@@ -201,12 +273,15 @@ describe('POST /api/checkout/sessions', () => {
 
   it('si delivery.zoneId no existe ⇒ 400', async () => {
     supabaseStub = makeSupabaseStub({
+      // La ruta ya no cae a una empresa por defecto.
+      companies: { single: { id: 'company-uuid-1', status: 'active' } },
       zones: { single: null }, // zona no existe
       customers: { onUpsert: () => ({ data: { id: 'x' } }) },
       orders: { onInsert: () => ({ data: { id: 'x' } }) },
     });
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: '573136913188',
+      company: 'bros-and-subs',
       customer: { name: 'Ana' },
       delivery: { address: 'Cra 1', zoneId: 'no-existe' },
     }));
@@ -219,6 +294,7 @@ describe('POST /api/checkout/sessions', () => {
   it('rechaza phone inválido con 400', async () => {
     const res = await POST(jsonRequest('http://localhost:3000/api/checkout/sessions', 'POST', {
       phone: 'abc',
+      company: 'bros-and-subs',
     }));
     expect(res.status).toBe(400);
     const body = await res.json();

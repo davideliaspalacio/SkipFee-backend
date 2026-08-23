@@ -14,14 +14,20 @@
 -- =========================================================================
 
 -- Roles dentro de una empresa. super_admin manda dentro de SU empresa.
-CREATE TYPE company_role AS ENUM ('super_admin', 'admin', 'cocina', 'empaque');
+DO $do$ BEGIN
+  CREATE TYPE company_role AS ENUM ('super_admin', 'admin', 'cocina', 'empaque');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $do$;
 
-CREATE TYPE company_status AS ENUM ('active', 'suspended');
+DO $do$ BEGIN
+  CREATE TYPE company_status AS ENUM ('active', 'suspended');
+EXCEPTION WHEN duplicate_object THEN NULL;
+END $do$;
 
 -- =========================================================================
 -- companies — el tenant
 -- =========================================================================
-CREATE TABLE companies (
+CREATE TABLE IF NOT EXISTS companies (
   id                uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   -- slug: identificador legible que viaja en la ruta /api/<slug>/...
   slug              text NOT NULL UNIQUE,
@@ -33,6 +39,7 @@ CREATE TABLE companies (
   updated_at        timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS companies_set_updated_at ON companies;
 CREATE TRIGGER companies_set_updated_at
   BEFORE UPDATE ON companies
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
@@ -42,7 +49,7 @@ CREATE TRIGGER companies_set_updated_at
 -- ⚠️ Datos sensibles. Acceso solo service_role (sin policy pública). En un
 --    endurecimiento posterior conviene cifrar las columnas con Vault/pgsodium.
 -- =========================================================================
-CREATE TABLE company_integrations (
+CREATE TABLE IF NOT EXISTS company_integrations (
   company_id              uuid PRIMARY KEY REFERENCES companies(id) ON DELETE CASCADE,
   -- Kapso (WhatsApp) — número + credenciales propias por empresa
   kapso_phone_number_id   text,
@@ -56,12 +63,13 @@ CREATE TABLE company_integrations (
   updated_at              timestamptz NOT NULL DEFAULT now()
 );
 
+DROP TRIGGER IF EXISTS company_integrations_set_updated_at ON company_integrations;
 CREATE TRIGGER company_integrations_set_updated_at
   BEFORE UPDATE ON company_integrations
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
 -- Resolver la empresa a partir del número que RECIBE el mensaje de WhatsApp.
-CREATE UNIQUE INDEX company_integrations_kapso_phone_idx
+CREATE UNIQUE INDEX IF NOT EXISTS company_integrations_kapso_phone_idx
   ON company_integrations (kapso_phone_number_id)
   WHERE kapso_phone_number_id IS NOT NULL;
 
@@ -70,20 +78,20 @@ CREATE UNIQUE INDEX company_integrations_kapso_phone_idx
 -- En esta fase: 1 fila por usuario (un usuario = una empresa). El modelo ya
 -- soporta multi-empresa a futuro sin migración.
 -- =========================================================================
-CREATE TABLE company_members (
+CREATE TABLE IF NOT EXISTS company_members (
   user_id    uuid NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
   company_id uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
   role       company_role NOT NULL DEFAULT 'admin',
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (user_id, company_id)
 );
-CREATE INDEX company_members_company_id_idx ON company_members(company_id);
+CREATE INDEX IF NOT EXISTS company_members_company_id_idx ON company_members(company_id);
 
 -- =========================================================================
 -- platform_admins — owner SkipFee (capa plataforma)
 -- Puede crear empresas y actuar sobre cualquiera.
 -- =========================================================================
-CREATE TABLE platform_admins (
+CREATE TABLE IF NOT EXISTS platform_admins (
   user_id    uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -123,11 +131,13 @@ ALTER TABLE company_members      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE platform_admins      ENABLE ROW LEVEL SECURITY;
 
 -- companies: un usuario ve la(s) empresa(s) a las que pertenece; el owner ve todas.
+DROP POLICY IF EXISTS companies_member_read ON companies;
 CREATE POLICY companies_member_read ON companies
   FOR SELECT TO authenticated
   USING (is_company_member(id));
 
 -- company_members: el usuario ve sus propias membresías; el owner ve todas.
+DROP POLICY IF EXISTS company_members_self_read ON company_members;
 CREATE POLICY company_members_self_read ON company_members
   FOR SELECT TO authenticated
   USING (user_id = auth.uid() OR is_platform_admin());

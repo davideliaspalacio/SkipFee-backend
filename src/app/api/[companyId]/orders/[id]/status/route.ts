@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import {
+  isMarketplaceProvider,
+  syncMarketplaceOrderStatus,
+  type OrderStatus,
+} from '@/lib/channels';
 import { notifyOrderStatus } from '@/lib/orders/notify';
 import { redeemRewardForOrder } from '@/lib/orders/rewards';
 import { withTenant } from '@/lib/tenant';
@@ -7,7 +12,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 const ORDER_STATUSES = ['nuevo', 'pagado', 'cocina', 'empacado', 'ruta', 'entregado'] as const;
-type OrderStatus = (typeof ORDER_STATUSES)[number];
 
 const bodySchema = z.object({
   status: z.enum(ORDER_STATUSES),
@@ -50,7 +54,7 @@ export const PATCH = withTenant<{ companyId: string; id: string }>(async (reques
   // 1. Obtener orden actual con nombre del customer (para el mensaje WhatsApp)
   const { data: order, error: getErr } = await sb
     .from('orders')
-    .select('id, status, phone, notified_statuses, customer:customers(name)')
+    .select('id, status, phone, notified_statuses, sales_channel, external_order_id, customer:customers(name)')
     .eq('company_id', companyId)
     .eq('id', id)
     .single();
@@ -102,12 +106,32 @@ export const PATCH = withTenant<{ companyId: string; id: string }>(async (reques
   // 4. Side effect: notificación de seguimiento idempotente (pagado/cocina/
   //    ruta/entregado). No falla el endpoint si el envío falla: el estado ya
   //    cambió en BD.
-  const result = await notifyOrderStatus({ sb, order, newStatus });
-  const notification = result.sent
-    ? { ok: true }
-    : result.error
-      ? { ok: false, error: result.error }
-      : null;
+  const channelProvider = (order as { sales_channel?: string | null }).sales_channel ?? null;
+  const externalOrderId = (order as { external_order_id?: string | null }).external_order_id ?? null;
+  const marketplace = isMarketplaceProvider(channelProvider) ? channelProvider : null;
+
+  const result = marketplace
+    ? { sent: false as const, error: undefined }
+    : await notifyOrderStatus({ sb, order, newStatus });
+  const notification = marketplace
+    ? { skipped: true, reason: 'marketplace_order' }
+    : result.sent
+      ? { ok: true }
+      : result.error
+        ? { ok: false, error: result.error }
+        : null;
+
+  const channelSync = marketplace
+    ? await syncMarketplaceOrderStatus({
+        sb,
+        companyId,
+        orderId: id,
+        provider: marketplace,
+        externalOrderId,
+        fromStatus: currentStatus,
+        toStatus: newStatus,
+      })
+    : null;
 
   // 5. Post-venta (Tarea 3): canjear (si hay) el cupón de postre vigente del
   //    cliente en este pedido apenas entra al kanban ('nuevo') o al pagar.
@@ -127,5 +151,6 @@ export const PATCH = withTenant<{ companyId: string; id: string }>(async (reques
     from: currentStatus,
     to: newStatus,
     notification,
+    channelSync,
   });
 });

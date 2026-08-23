@@ -781,8 +781,12 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
 
   // companyId va en el payload para que la ruta de checkout (otro agente, aún
   // por migrar a por-empresa) cree la sesión/pedido en la empresa correcta.
-  const sessionPayload: Record<string, unknown> = { phone: ctx.phone };
-  if (ctx.companyId) sessionPayload.companyId = ctx.companyId;
+  // `companyId` va SIEMPRE: la ruta de checkout ya no tiene fallback a una
+  // empresa por defecto y responde 400 si falta.
+  const sessionPayload: Record<string, unknown> = {
+    phone: ctx.phone,
+    companyId: ctx.companyId,
+  };
   if (customer?.name) {
     sessionPayload.customer = {
       name: customer.name,
@@ -853,7 +857,8 @@ export async function enviarLinkPedido(ctx: HandlerContext): Promise<FlowState> 
 interface PostventaSettings {
   reviewGiftEnabled: boolean;
   reviewGiftName: string;
-  reviewLink: string;
+  /** Link de reseñas del negocio. `null` = no configurado todavía. */
+  reviewLink: string | null;
   reviewGiftExpiryDays: number;
 }
 
@@ -869,8 +874,10 @@ async function loadPostventaSettings(companyId?: string): Promise<PostventaSetti
   ).maybeSingle();
   return {
     reviewGiftEnabled: (data?.review_gift_enabled as boolean) ?? true,
-    reviewGiftName: (data?.review_gift_name as string) ?? 'Postre',
-    reviewLink: (data?.review_link as string) ?? 'https://maps.app.goo.gl/S3tbdt5KaTnBeioVA',
+    reviewGiftName: (data?.review_gift_name as string) ?? 'un detalle',
+    // Sin fallback a propósito: antes caía al Google Maps de Bros and Subs, o
+    // sea que un negocio sin configurar pedía reseñas PARA OTRO NEGOCIO.
+    reviewLink: (data?.review_link as string | null) ?? null,
     reviewGiftExpiryDays: (data?.review_gift_expiry_days as number) ?? 30,
   };
 }
@@ -949,20 +956,37 @@ export async function handlePostventaEncuesta(ctx: HandlerContext): Promise<Flow
     return { ...ctx.state, step: 'finalizado' };
   }
 
-  // Rama alta (4–5): invitar a reseñar con link + promesa del postre.
+  // Rama alta (4–5): invitar a reseñar con link + promesa del regalo.
   const settings = await loadPostventaSettings(ctx.companyId);
+
+  // Sin link de reseñas configurado no hay a dónde mandar al cliente, y el
+  // regalo se valida contra esa reseña: se agradece y se cierra. Antes esto
+  // caía a un fallback con el Google Maps del negocio piloto.
+  if (!settings.reviewLink) {
+    await sendCatalogText(ctx, ctx.phone, 'postventa.gracias_baja', {
+      nombre: ctx.state.customer?.name?.split(' ')[0] ?? '',
+    });
+    console.log('[postventa] sin review_link configurado, se omite la invitación', {
+      companyId: ctx.companyId,
+    });
+    return { ...ctx.state, step: 'finalizado' };
+  }
+
+  // A una const: TypeScript no puede estrechar el tipo de una propiedad dentro
+  // del closure de `send`, aunque el guard de arriba ya descartó el null.
+  const reviewLink = settings.reviewLink;
   const linkMsg = await getMessage('postventa.invitar_resena', ctx.companyId);
   const resenaBody = render(linkMsg.body, { postre: settings.reviewGiftName });
   const resenaDisplay = linkMsg.displayText ?? 'Dejar reseña ⭐';
   await botSendInteractive(ctx, {
     to: ctx.phone,
-    body: `${resenaBody}\n\n🔗 ${resenaDisplay}: ${settings.reviewLink}`,
+    body: `${resenaBody}\n\n🔗 ${resenaDisplay}: ${reviewLink}`,
     send: () =>
       botSendCtaUrlMsg(ctx.companyId, {
         to: ctx.phone,
         body: resenaBody,
         displayText: resenaDisplay,
-        url: settings.reviewLink,
+        url: reviewLink,
       }),
   });
   return { ...ctx.state, step: 'postventa_resena' };

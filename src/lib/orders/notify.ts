@@ -1,6 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { sendText } from '@/lib/kapso/client';
-import { kapsoFor } from '@/lib/integrations';
+import { botSendTextMsg } from '@/lib/bot/sender';
 import { recordMessage } from '@/lib/messaging';
 import { getMessage } from '@/lib/bot/messages/catalog';
 import { render } from '@/lib/bot/messages/render';
@@ -82,9 +81,9 @@ export async function notifyOrderStatus(opts: {
   const body = await messageFor(newStatus, firstNameOf(order));
 
   try {
-    const result = companyId
-      ? await (await kapsoFor(companyId)).sendText(order.phone, body)
-      : await sendText(order.phone, body);
+    // Enruta por el proveedor de la empresa (Kapso o Evolution). Sin
+    // companyId cae al camino legacy del env global, igual que antes.
+    const result = await botSendTextMsg(companyId, order.phone, body);
     const wamid = result?.messages?.[0]?.id ?? null;
     await recordMessage({ phone: order.phone, direction: 'bot', body, kapsoMessageId: wamid, companyId });
 
