@@ -95,6 +95,11 @@ export class EvolutionClient {
    * Acepta "+57 300 123 4567" o "573001234567@s.whatsapp.net".
    */
   static normalizeNumber(to: string): string {
+    // Un LID no es un teléfono. Si se le quita el sufijo, Evolution asume
+    // `@s.whatsapp.net` y responde `exists: false` — que es exactamente cómo se
+    // rompía: el mensaje entraba bien y la respuesta se iba a un destino
+    // inexistente. El sufijo viaja intacto.
+    if (to.endsWith('@lid')) return to;
     return to.split('@')[0].replace(/\D/g, '');
   }
 
