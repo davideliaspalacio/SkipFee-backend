@@ -175,6 +175,11 @@ export async function handleInboundMessage(
   void processFlowMessage(botOpts).catch(async err => {
     console.error('[bot] error en processFlowMessage', { chatId, err });
     const { manejarErrorInesperado } = await import('@/lib/bot/flow/handlers');
-    await manejarErrorInesperado({ chatId, phone: envelope.from });
+    // `companyId` es obligatorio aquí aunque el tipo lo permita opcional: sin él
+    // el aviso de error sale por el proveedor global (Kapso) en vez del de la
+    // empresa, así que a un negocio de Evolution el fallback le fallaba también
+    // —y el log terminaba mostrando un error de Meta que no tenía nada que ver
+    // con la causa real, mandando a buscar donde no era.
+    await manejarErrorInesperado({ chatId, phone: envelope.from, companyId });
   });
 }

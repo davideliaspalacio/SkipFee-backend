@@ -29,6 +29,9 @@ const dataSchema = z
       .object({
         id: z.string().optional(),
         remoteJid: z.string().optional(),
+        /** El teléfono real cuando `remoteJid` viene como LID. Ver `remitenteDe`. */
+        remoteJidAlt: z.string().optional(),
+        addressingMode: z.string().optional(),
         fromMe: z.boolean().optional(),
       })
       .passthrough(),
@@ -86,6 +89,58 @@ export function phoneFromJid(jid: string): string {
   return jid.split('@')[0].split(':')[0].replace(/\D/g, '');
 }
 
+/** ¿Este JID es un LID y no un teléfono? */
+export function esLid(jid: string): boolean {
+  return jid.endsWith('@lid');
+}
+
+/**
+ * Quién escribió, en teléfono de verdad cuando se puede saber.
+ *
+ * WhatsApp dejó de entregar siempre el número: desde el direccionamiento por
+ * **LID**, el `remoteJid` puede venir como `2602968314104@lid`, un identificador
+ * interno que NO es un teléfono. Guardarlo como si lo fuera es lo que rompe el
+ * resto del sistema aguas abajo — `customers.phone` es único y es por donde se
+ * reconoce a un cliente que vuelve, y las notificaciones del pedido salen hacia
+ * ese número. Con un LID ahí, el cliente se duplica en cada visita y los avisos
+ * de "tu pedido va en camino" se van a un destino que no existe.
+ *
+ * Cuando el mensaje viene por LID, WhatsApp manda el teléfono aparte en
+ * `remoteJidAlt`. Se prefiere ese.
+ *
+ * Si no viene —pasa, y no hay forma de resolverlo desde el webhook— se usa el
+ * LID como identidad. Es lo menos malo: la conversación sigue coherente y las
+ * respuestas llegan igual, porque se contesta al mismo JID. Lo que no se puede
+ * es fingir que eso es un teléfono, así que se devuelve marcado.
+ */
+export function remitenteDe(key: {
+  remoteJid?: string;
+  remoteJidAlt?: string;
+  addressingMode?: string;
+}): { id: string; esTelefono: boolean } {
+  const jid = key.remoteJid ?? '';
+  const porLid = key.addressingMode === 'lid' || esLid(jid);
+
+  if (porLid) {
+    const alt = key.remoteJidAlt ?? '';
+    // El alterno solo sirve si de verdad es un teléfono; si viniera otro LID,
+    // preferir el original antes que cambiar un identificador opaco por otro.
+    if (alt && !esLid(alt)) {
+      const telefono = phoneFromJid(alt);
+      if (telefono) return { id: telefono, esTelefono: true };
+    }
+    // Se devuelve CON el sufijo `@lid` a propósito. El identificador tiene que
+    // llevar puesto qué tipo de cosa es: si se guarda pelado, más adelante
+    // alguien lo trata como teléfono —y el envío termina en
+    // `<lid>@s.whatsapp.net`, que no existe— o peor, queda en `customers.phone`
+    // pareciendo un número de verdad. Que se vea raro es la gracia.
+    const lid = jid.split(':')[0];
+    return { id: lid.endsWith('@lid') ? lid : `${phoneFromJid(jid)}@lid`, esTelefono: false };
+  }
+
+  return { id: phoneFromJid(jid), esTelefono: true };
+}
+
 /** Eventos de mensaje entrante que nos interesan. */
 const MESSAGE_EVENTS = new Set(['messages.upsert', 'MESSAGES_UPSERT']);
 
@@ -119,8 +174,16 @@ export function parseEvolutionInbound(payload: unknown): InboundEnvelope | null 
   if (jid.startsWith('status@')) return null;
   if (!jid) return null;
 
-  const from = phoneFromJid(jid);
+  const remitente = remitenteDe(item.key);
+  const from = remitente.id;
   if (!from) return null;
+
+  if (!remitente.esTelefono) {
+    // Se sigue adelante: contestar funciona igual. Pero queda dicho en el log,
+    // porque el pedido que salga de este chat va a llevar un identificador
+    // interno donde debería ir un teléfono.
+    console.warn('[evolution parse] entrante por LID sin teléfono asociado', { jid });
+  }
 
   const base = {
     providerMessageId: item.key.id ?? `${jid}:${Date.now()}`,
